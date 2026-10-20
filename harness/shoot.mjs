@@ -127,7 +127,7 @@ try {
     d.shadowRoot.querySelector('.chip').click();
     out.moreInfo = moreInfo;
 
-    // controls dialog (fallback overlay: no ha-dialog in the harness)
+    // controls dialog
     d.shadowRoot.querySelector('.round.menu').click();
     await new Promise((res) => setTimeout(res, 50));
     out.controlRows = [...d.shadowRoot.querySelectorAll('.overlay .rows > *')].map((n) => n.textContent);
@@ -146,12 +146,48 @@ try {
     d.setConfig(structuredClone(ffConfig));
     out.overlayAfterSetConfig = d.shadowRoot.querySelectorAll('.overlay').length;
     out.rowsAfterSetConfig = d._dialogRows.length;
-    // disconnect while open removes the dialog
+    // A masonry view may disconnect and reconnect a card in one task while it
+    // moves it between columns. Its open controls and armed action must survive.
     menu().click();
     await new Promise((res) => setTimeout(res, 50));
+    btn().click();
+    const secondParent = document.createElement('div');
+    document.body.appendChild(secondParent);
     d.remove();
+    secondParent.appendChild(d);
+    await new Promise((res) => setTimeout(res, 100));
+    out.overlayAfterTransientReparent = d.shadowRoot.querySelectorAll('.overlay').length;
+    out.rowsAfterTransientReparent = d.shadowRoot.querySelectorAll('.overlay .rows > *').length;
+    out.armedAfterTransientReparent = btn().classList.contains('armed');
+
+    // A real disconnect still tears down the controls and confirm state.
+    d.remove();
+    await new Promise((res) => setTimeout(res, 100));
     out.overlayAfterDisconnect = d.shadowRoot.querySelectorAll('.overlay').length;
-    host.appendChild(d);
+    out.rowsAfterDisconnect = d._dialogRows.length;
+    out.armedAfterDisconnect = d._armed === -1;
+
+    // Eight controls fit within a 600px card. The panel stays inside the card
+    // and advertises a scroll container for real HA rows that exceed its height.
+    const eight = document.createElement('pet-feeder-card');
+    const controlIds = Array.from({ length: 8 }, (_, i) => `input_select.freshfeed_control_${i}`);
+    const eightStates = {
+      ...ffStates({ status: 'standby', food: 'high' }),
+      ...Object.fromEntries(controlIds.map((id, i) => [id, { state: 'option', attributes: { friendly_name: `FreshFeed control ${i + 1}` } }])),
+    };
+    const eightConfig = { ...structuredClone(ffConfig), controls: controlIds };
+    eight.style.cssText = 'display:block;width:420px;height:600px';
+    eight.setConfig(eightConfig);
+    eight.hass = makeHass(eightStates);
+    document.body.appendChild(eight);
+    eight.shadowRoot.querySelector('.round.menu').click();
+    await new Promise((res) => setTimeout(res, 50));
+    const panel = eight.shadowRoot.querySelector('.panel');
+    const cardRect = eight.shadowRoot.querySelector('ha-card').getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    out.eightControlPanelInsideCard = panelRect.top >= cardRect.top && panelRect.bottom <= cardRect.bottom;
+    out.eightControlPanelScrollable = getComputedStyle(panel).overflowY === 'auto';
+    eight.remove();
 
     // stub config renders
     const e = document.createElement('pet-feeder-card');
@@ -190,7 +226,11 @@ try {
   check(r.overlayClosed, 'controls dialog closes');
   check(r.overlayCount === 1, `double/triple menu click opens exactly one dialog (got ${r.overlayCount})`);
   check(r.overlayAfterSetConfig === 0 && r.rowsAfterSetConfig === 0, `setConfig while open removes the dialog (overlays ${r.overlayAfterSetConfig}, rows ${r.rowsAfterSetConfig})`);
-  check(r.overlayAfterDisconnect === 0, `disconnect while open removes the dialog (got ${r.overlayAfterDisconnect})`);
+  check(r.overlayAfterTransientReparent === 1 && r.rowsAfterTransientReparent === 3, `transient re-parent preserves open controls and rows (overlays ${r.overlayAfterTransientReparent}, rows ${r.rowsAfterTransientReparent})`);
+  check(r.armedAfterTransientReparent, 'transient re-parent preserves an armed action');
+  check(r.overlayAfterDisconnect === 0 && r.rowsAfterDisconnect === 0, `real disconnect removes controls and rows (overlays ${r.overlayAfterDisconnect}, rows ${r.rowsAfterDisconnect})`);
+  check(r.armedAfterDisconnect, 'real disconnect disarms the confirm action');
+  check(r.eightControlPanelInsideCard && r.eightControlPanelScrollable, `eight-control panel stays inside a 600px card and scrolls (inside ${r.eightControlPanelInsideCard}, scrollable ${r.eightControlPanelScrollable})`);
   check(r.stub === 'FreshFeed' && r.size === 7, `stub config renders (got ${r.stub}, size ${r.size})`);
   check(r.grid === '{"columns":12,"min_columns":6,"rows":"auto"}', `grid options (got ${r.grid})`);
   check(r.customCards.includes('"type":"pet-feeder-card"'), 'registered in window.customCards');
@@ -221,48 +261,6 @@ try {
   const kbCalls = await page.evaluate(() => window.__calls.length);
   check(kbCalls === 1, `second Enter calls the service exactly once (calls ${kbCalls})`);
   await page.evaluate(() => document.getElementById('kbd').remove());
-
-  // ---- HA dialog path (ha-dialog stand-in) ------------------------------------------
-  const hd = await ctx.newPage();
-  hd.on('pageerror', (e) => pageErrors.push(`hadialog page: ${e}`));
-  await hd.goto(`${BASE}?scenario=freshfeed-ready-high&hadialog=1`);
-  await hd.waitForFunction(() => window.__ready === true);
-  const h = await hd.evaluate(async () => {
-    const c = document.querySelector('pet-feeder-card');
-    const menu = () => c.shadowRoot.querySelector('.round.menu');
-    const out = {};
-    menu().click();
-    menu().click();
-    await new Promise((res) => setTimeout(res, 50));
-    menu().click();
-    await new Promise((res) => setTimeout(res, 50));
-    const dlgs = c.shadowRoot.querySelectorAll('ha-dialog');
-    out.count = dlgs.length;
-    const dlg = dlgs[0];
-    out.heading = dlg?.getAttribute('heading');
-    out.headerTitleAttr = dlg?.getAttribute('header-title');
-    out.headerTitleProp = dlg?.headerTitle;
-    out.ariaLabel = dlg?.getAttribute('aria-label');
-    out.open = dlg?.open;
-    out.rows = dlg ? dlg.querySelectorAll('.rows > *').length : 0;
-    c.setConfig(structuredClone(window.__harness.ffConfig));
-    out.afterSetConfig = c.shadowRoot.querySelectorAll('ha-dialog').length;
-    out.rowsAfterSetConfig = c._dialogRows.length;
-    menu().click();
-    await new Promise((res) => setTimeout(res, 50));
-    c.remove();
-    out.afterDisconnect = c.shadowRoot.querySelectorAll('ha-dialog').length;
-    return out;
-  });
-  await hd.close();
-  check(h.count === 1, `ha-dialog: repeated menu clicks open exactly one dialog (got ${h.count})`);
-  check(
-    h.heading === 'FreshFeed controls' && h.headerTitleAttr === 'FreshFeed controls' && h.headerTitleProp === 'FreshFeed controls' && h.ariaLabel === 'FreshFeed controls',
-    `ha-dialog title set as heading, header-title, headerTitle and aria-label (got ${JSON.stringify([h.heading, h.headerTitleAttr, h.headerTitleProp, h.ariaLabel])})`,
-  );
-  check(h.open === true && h.rows === 3, `ha-dialog is open with 3 rows (open ${h.open}, rows ${h.rows})`);
-  check(h.afterSetConfig === 0 && h.rowsAfterSetConfig === 0, `ha-dialog: setConfig while open removes it (dialogs ${h.afterSetConfig}, rows ${h.rowsAfterSetConfig})`);
-  check(h.afterDisconnect === 0, `ha-dialog: disconnect while open removes it (got ${h.afterDisconnect})`);
 
   // ---- screenshots ----------------------------------------------------------------
   // Freeze every animation at a mid frame so the feeding state is visible and stable.

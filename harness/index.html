@@ -57,18 +57,6 @@ customElements.define('ha-icon', class extends HTMLElement {
   }
 });
 
-// Optional (?hadialog=1): a minimal ha-dialog stand-in so the card takes its
-// HA-dialog path. Closing (open = false) fires 'closed' like the real one.
-if (new URLSearchParams(location.search).get('hadialog')) {
-  customElements.define('ha-dialog', class extends HTMLElement {
-    set open(v) {
-      this._open = v;
-      if (!v) this.dispatchEvent(new CustomEvent('closed'));
-    }
-    get open() { return this._open; }
-  });
-}
-
 // --- Mock hass ---------------------------------------------------------------
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();

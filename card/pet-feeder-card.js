@@ -916,13 +916,17 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
 .item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .overlay {
   position: absolute; inset: 0; z-index: 5; display: flex; align-items: flex-start; justify-content: center;
-  background: rgba(0,0,0,.32); padding: 60px 16px 16px; box-sizing: border-box;
+  background: rgba(0,0,0,.32); padding: 32px 16px; box-sizing: border-box;
 }
 .panel {
   width: 100%; max-width: 420px; background: var(--card-background-color, #fff); border-radius: 16px;
   box-shadow: 0 8px 28px rgba(0,0,0,.3); padding: 8px 16px 16px; box-sizing: border-box;
+  max-height: 100%; overflow-y: auto;
 }
-.panel-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 0 8px; }
+.panel-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 0 8px; background: var(--card-background-color, #fff);
+}
 .panel-title { font-size: 18px; font-weight: 500; color: var(--primary-text-color, #212121); }
 .panel .round { width: 40px; height: 40px; border-color: transparent; }
 .rows > * { display: block; margin: 4px 0; }
@@ -960,9 +964,10 @@ export class PetFeederCard extends Base {
     this._armed = -1; // index of the action awaiting confirmation
     this._armTimer = null;
     this._tick = null;
+    this._disconnectTimer = null;
     this._dialogRows = [];
-    // The single controls dialog: { el, kind: 'ha' | 'overlay' } or null. A dialog
-    // that is still being built (rows load asynchronously) is tracked by
+    // The single in-card controls overlay. An overlay that is still being built
+    // (rows load asynchronously) is tracked by
     // _dialogOpening; _dialogGen invalidates an in-flight open when the dialog is
     // closed (setConfig, disconnect) before it finished building.
     this._dialog = null;
@@ -1003,6 +1008,8 @@ export class PetFeederCard extends Base {
   }
 
   connectedCallback() {
+    clearTimeout(this._disconnectTimer);
+    this._disconnectTimer = null;
     if (!this._tick) this._tick = setInterval(() => this._render(), TICK_MS);
     this._render();
   }
@@ -1010,8 +1017,16 @@ export class PetFeederCard extends Base {
   disconnectedCallback() {
     clearInterval(this._tick);
     this._tick = null;
-    this._disarm(false);
-    this._closeControls();
+    clearTimeout(this._disconnectTimer);
+    // HA's masonry layout briefly disconnects cards while moving them between
+    // columns. Let a same-task reconnect cancel this cleanup.
+    this._disconnectTimer = setTimeout(() => {
+      this._disconnectTimer = null;
+      if (!this.isConnected) {
+        this._closeControls();
+        this._disarm(false);
+      }
+    }, 0);
   }
 
   /** Entity ids whose state objects drive the render. */
@@ -1100,7 +1115,7 @@ export class PetFeederCard extends Base {
       </div>
       ${gauge ? `<div class="gauges">${gauge}</div>` : ''}
       ${footer}`;
-    if (this._dialog?.kind === 'overlay') this._root.appendChild(this._dialog.el); // keep an open fallback dialog
+    if (this._dialog) this._root.appendChild(this._dialog.el); // keep the open overlay after re-render
     if (focusedAction != null) {
       this._root.querySelector(`.actions .round[data-action="${focusedAction}"]`)?.focus();
     }
@@ -1155,8 +1170,7 @@ export class PetFeederCard extends Base {
   _openControls() {
     if (this._dialog) {
       // Already open: bring it forward instead of stacking a second one.
-      const target = this._dialog.kind === 'overlay' ? this._dialog.el.querySelector('[data-close]') : this._dialog.el;
-      target?.focus?.();
+      this._dialog.el.querySelector('[data-close]')?.focus?.();
       return this._dialogOpening || Promise.resolve();
     }
     if (this._dialogOpening) return this._dialogOpening; // still building
@@ -1174,34 +1188,6 @@ export class PetFeederCard extends Base {
     if (gen !== this._dialogGen) return; // closed (setConfig/disconnect) while loading
     this._dialogRows = rows;
     const title = `${c.name} controls`;
-    if (customElements.get('ha-dialog')) {
-      const dlg = document.createElement('ha-dialog');
-      // ha-dialog's title API has changed across HA releases: older ones read
-      // `heading`, current ones `header-title` / headerTitle. Set all of them.
-      dlg.setAttribute('heading', title);
-      dlg.setAttribute('header-title', title);
-      dlg.headerTitle = title;
-      dlg.setAttribute('aria-label', title);
-      dlg.hideActions = true; // harmless where unsupported; not relied on
-      const box = document.createElement('div');
-      box.className = 'rows';
-      rows.forEach((r) => box.appendChild(r));
-      dlg.appendChild(box);
-      dlg.addEventListener('closed', (ev) => {
-        // Rows (e.g. select menus) fire their own bubbling 'closed' events.
-        if (ev.target !== dlg) return;
-        if (this._dialog?.el === dlg) {
-          this._dialog = null;
-          this._dialogRows = [];
-        }
-        dlg.remove();
-      });
-      this._dialog = { el: dlg, kind: 'ha' };
-      this.shadowRoot.appendChild(dlg);
-      dlg.open = true;
-      return;
-    }
-    // Fallback: a simple in-card overlay.
     const ov = document.createElement('div');
     ov.className = 'overlay';
     ov.innerHTML = `<div class="panel" role="dialog" aria-label="${esc(title)}"><div class="panel-head"><span class="panel-title">${esc(title)}</span>
@@ -1211,7 +1197,7 @@ export class PetFeederCard extends Base {
     ov.addEventListener('click', (e) => {
       if (e.target === ov) this._closeControls();
     });
-    this._dialog = { el: ov, kind: 'overlay' };
+    this._dialog = { el: ov };
     this._root.appendChild(ov);
   }
 
@@ -1223,7 +1209,6 @@ export class PetFeederCard extends Base {
     this._dialog = null;
     this._dialogRows = [];
     if (!d) return;
-    if (d.kind === 'ha') d.el.open = false; // its 'closed' handler sees _dialog already cleared
     d.el.remove();
   }
 
