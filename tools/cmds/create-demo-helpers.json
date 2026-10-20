@@ -1,0 +1,16 @@
+[
+  {"type": "input_select/create", "name": "FreshFeed Demo Status", "icon": "mdi:state-machine",
+   "options": ["standby", "feeding", "feeding_complete", "no_food"]},
+  {"type": "input_select/create", "name": "FreshFeed Demo Food Level", "icon": "mdi:bowl",
+   "options": ["high", "low", "empty"]},
+  {"type": "input_boolean/create", "name": "FreshFeed Demo Fault", "icon": "mdi:alert-octagon-outline"},
+  {"type": "input_boolean/create", "name": "FreshFeed Demo Stainless Inserts", "icon": "mdi:silverware-variant"},
+  {"type": "input_number/create", "name": "FreshFeed Demo Last Feed", "icon": "mdi:food-drumstick",
+   "min": 0, "max": 12, "step": 1, "mode": "slider", "unit_of_measurement": "portions"},
+  {"type": "input_number/create", "name": "FreshFeed Demo Counter", "icon": "mdi:counter",
+   "min": 0, "max": 999, "step": 1, "mode": "box", "unit_of_measurement": "meals"},
+  {"type": "input_number/create", "name": "FreshFeed Demo Brightness", "icon": "mdi:brightness-6",
+   "min": 0, "max": 10, "step": 1, "mode": "slider"},
+  {"type": "input_datetime/create", "name": "FreshFeed Demo Next Meal", "icon": "mdi:clock-outline",
+   "has_date": true, "has_time": true}
+]
