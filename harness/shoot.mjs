@@ -134,6 +134,25 @@ try {
     d.shadowRoot.querySelector('[data-close]').click();
     out.overlayClosed = !d.shadowRoot.querySelector('.overlay');
 
+    // dialog de-dupe: a double click on the menu opens exactly one overlay
+    const menu = () => d.shadowRoot.querySelector('.round.menu');
+    menu().click();
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    out.overlayCount = d.shadowRoot.querySelectorAll('.overlay').length;
+    // setConfig while open removes the dialog
+    d.setConfig(structuredClone(ffConfig));
+    out.overlayAfterSetConfig = d.shadowRoot.querySelectorAll('.overlay').length;
+    out.rowsAfterSetConfig = d._dialogRows.length;
+    // disconnect while open removes the dialog
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    d.remove();
+    out.overlayAfterDisconnect = d.shadowRoot.querySelectorAll('.overlay').length;
+    host.appendChild(d);
+
     // stub config renders
     const e = document.createElement('pet-feeder-card');
     e.setConfig(customElements.get('pet-feeder-card').getStubConfig());
@@ -169,9 +188,81 @@ try {
   check(r.moreInfo === 'input_number.freshfeed_demo_last_feed', `chip fires hass-more-info (got ${r.moreInfo})`);
   check(r.controlRows.length === 3 && r.controlRows[0].includes('FreshFeed demo status'), `controls dialog lists rows (got ${JSON.stringify(r.controlRows)})`);
   check(r.overlayClosed, 'controls dialog closes');
+  check(r.overlayCount === 1, `double/triple menu click opens exactly one dialog (got ${r.overlayCount})`);
+  check(r.overlayAfterSetConfig === 0 && r.rowsAfterSetConfig === 0, `setConfig while open removes the dialog (overlays ${r.overlayAfterSetConfig}, rows ${r.rowsAfterSetConfig})`);
+  check(r.overlayAfterDisconnect === 0, `disconnect while open removes the dialog (got ${r.overlayAfterDisconnect})`);
   check(r.stub === 'FreshFeed' && r.size === 7, `stub config renders (got ${r.stub}, size ${r.size})`);
   check(r.grid === '{"columns":12,"min_columns":6,"rows":"auto"}', `grid options (got ${r.grid})`);
   check(r.customCards.includes('"type":"pet-feeder-card"'), 'registered in window.customCards');
+
+  // ---- keyboard confirm: real key presses; focus must survive the arming re-render ----
+  await page.evaluate(() => {
+    const { makeHass, ffConfig, ffStates } = window.__harness;
+    const k = document.createElement('pet-feeder-card');
+    k.id = 'kbd';
+    k.setConfig(structuredClone(ffConfig));
+    k.hass = makeHass(ffStates({ status: 'standby', food: 'high' }));
+    document.body.appendChild(k);
+    window.__calls.length = 0;
+    k.shadowRoot.querySelector('.actions .round[data-action="0"]').focus();
+  });
+  await page.keyboard.press('Enter');
+  const kbArmed = await page.evaluate(() => {
+    const k = document.getElementById('kbd');
+    return {
+      calls: window.__calls.length,
+      armed: k.shadowRoot.querySelector('.actions .round').classList.contains('armed'),
+      focused: k.shadowRoot.activeElement?.dataset?.action ?? null,
+    };
+  });
+  check(kbArmed.armed && kbArmed.calls === 0, `Enter on a focused action arms it without calling (armed ${kbArmed.armed}, calls ${kbArmed.calls})`);
+  check(kbArmed.focused === '0', `armed action button keeps keyboard focus (focused data-action ${kbArmed.focused})`);
+  await page.keyboard.press('Enter');
+  const kbCalls = await page.evaluate(() => window.__calls.length);
+  check(kbCalls === 1, `second Enter calls the service exactly once (calls ${kbCalls})`);
+  await page.evaluate(() => document.getElementById('kbd').remove());
+
+  // ---- HA dialog path (ha-dialog stand-in) ------------------------------------------
+  const hd = await ctx.newPage();
+  hd.on('pageerror', (e) => pageErrors.push(`hadialog page: ${e}`));
+  await hd.goto(`${BASE}?scenario=freshfeed-ready-high&hadialog=1`);
+  await hd.waitForFunction(() => window.__ready === true);
+  const h = await hd.evaluate(async () => {
+    const c = document.querySelector('pet-feeder-card');
+    const menu = () => c.shadowRoot.querySelector('.round.menu');
+    const out = {};
+    menu().click();
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    const dlgs = c.shadowRoot.querySelectorAll('ha-dialog');
+    out.count = dlgs.length;
+    const dlg = dlgs[0];
+    out.heading = dlg?.getAttribute('heading');
+    out.headerTitleAttr = dlg?.getAttribute('header-title');
+    out.headerTitleProp = dlg?.headerTitle;
+    out.ariaLabel = dlg?.getAttribute('aria-label');
+    out.open = dlg?.open;
+    out.rows = dlg ? dlg.querySelectorAll('.rows > *').length : 0;
+    c.setConfig(structuredClone(window.__harness.ffConfig));
+    out.afterSetConfig = c.shadowRoot.querySelectorAll('ha-dialog').length;
+    out.rowsAfterSetConfig = c._dialogRows.length;
+    menu().click();
+    await new Promise((res) => setTimeout(res, 50));
+    c.remove();
+    out.afterDisconnect = c.shadowRoot.querySelectorAll('ha-dialog').length;
+    return out;
+  });
+  await hd.close();
+  check(h.count === 1, `ha-dialog: repeated menu clicks open exactly one dialog (got ${h.count})`);
+  check(
+    h.heading === 'FreshFeed controls' && h.headerTitleAttr === 'FreshFeed controls' && h.headerTitleProp === 'FreshFeed controls' && h.ariaLabel === 'FreshFeed controls',
+    `ha-dialog title set as heading, header-title, headerTitle and aria-label (got ${JSON.stringify([h.heading, h.headerTitleAttr, h.headerTitleProp, h.ariaLabel])})`,
+  );
+  check(h.open === true && h.rows === 3, `ha-dialog is open with 3 rows (open ${h.open}, rows ${h.rows})`);
+  check(h.afterSetConfig === 0 && h.rowsAfterSetConfig === 0, `ha-dialog: setConfig while open removes it (dialogs ${h.afterSetConfig}, rows ${h.rowsAfterSetConfig})`);
+  check(h.afterDisconnect === 0, `ha-dialog: disconnect while open removes it (got ${h.afterDisconnect})`);
 
   // ---- screenshots ----------------------------------------------------------------
   // Freeze every animation at a mid frame so the feeding state is visible and stable.

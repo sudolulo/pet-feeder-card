@@ -961,7 +961,13 @@ export class PetFeederCard extends Base {
     this._armTimer = null;
     this._tick = null;
     this._dialogRows = [];
-    this._overlay = null; // fallback controls dialog, when ha-dialog is unavailable
+    // The single controls dialog: { el, kind: 'ha' | 'overlay' } or null. A dialog
+    // that is still being built (rows load asynchronously) is tracked by
+    // _dialogOpening; _dialogGen invalidates an in-flight open when the dialog is
+    // closed (setConfig, disconnect) before it finished building.
+    this._dialog = null;
+    this._dialogOpening = null;
+    this._dialogGen = 0;
     this._root = null;
   }
 
@@ -979,6 +985,7 @@ export class PetFeederCard extends Base {
 
   setConfig(config) {
     this._config = validateConfig(config); // throws a readable Error for HA's error card
+    this._closeControls(); // its rows belong to the old config
     this._disarm(false);
     this._seen.clear();
     this._render();
@@ -1004,6 +1011,7 @@ export class PetFeederCard extends Base {
     clearInterval(this._tick);
     this._tick = null;
     this._disarm(false);
+    this._closeControls();
   }
 
   /** Entity ids whose state objects drive the render. */
@@ -1066,6 +1074,10 @@ export class PetFeederCard extends Base {
          </div>`
       : '';
 
+    // innerHTML replaces every element; remember which action button had keyboard
+    // focus so a keyboard user can confirm an armed action with a second Enter/Space.
+    const focusedAction = this.shadowRoot.activeElement?.dataset?.action;
+
     const footer = m.footer.length
       ? `<div class="footer${m.footer.length === 1 ? ' single' : ''}">${m.footer
           .map((f) => `<div class="item" data-key="${esc(f.key)}"${more(f.entity)} title="${esc(f.key.replace(/_/g, ' '))}">${icon(f.icon)}<span>${esc(f.value)}</span></div>`)
@@ -1088,7 +1100,10 @@ export class PetFeederCard extends Base {
       </div>
       ${gauge ? `<div class="gauges">${gauge}</div>` : ''}
       ${footer}`;
-    if (this._overlay) this._root.appendChild(this._overlay); // keep an open fallback dialog
+    if (this._dialog?.kind === 'overlay') this._root.appendChild(this._dialog.el); // keep an open fallback dialog
+    if (focusedAction != null) {
+      this._root.querySelector(`.actions .round[data-action="${focusedAction}"]`)?.focus();
+    }
   }
 
   _onClick(ev) {
@@ -1137,23 +1152,51 @@ export class PetFeederCard extends Base {
     if (render && was !== -1) this._render();
   }
 
-  async _openControls() {
+  _openControls() {
+    if (this._dialog) {
+      // Already open: bring it forward instead of stacking a second one.
+      const target = this._dialog.kind === 'overlay' ? this._dialog.el.querySelector('[data-close]') : this._dialog.el;
+      target?.focus?.();
+      return this._dialogOpening || Promise.resolve();
+    }
+    if (this._dialogOpening) return this._dialogOpening; // still building
+    const gen = ++this._dialogGen;
+    const opening = this._buildControls(gen).finally(() => {
+      if (this._dialogOpening === opening) this._dialogOpening = null;
+    });
+    this._dialogOpening = opening;
+    return opening;
+  }
+
+  async _buildControls(gen) {
     const c = this._config;
     const rows = await this._createRows(c.controls);
+    if (gen !== this._dialogGen) return; // closed (setConfig/disconnect) while loading
     this._dialogRows = rows;
-    const title = `${esc(c.name)} controls`;
+    const title = `${c.name} controls`;
     if (customElements.get('ha-dialog')) {
       const dlg = document.createElement('ha-dialog');
-      dlg.setAttribute('heading', `${c.name} controls`);
-      dlg.hideActions = true;
+      // ha-dialog's title API has changed across HA releases: older ones read
+      // `heading`, current ones `header-title` / headerTitle. Set all of them.
+      dlg.setAttribute('heading', title);
+      dlg.setAttribute('header-title', title);
+      dlg.headerTitle = title;
+      dlg.setAttribute('aria-label', title);
+      dlg.hideActions = true; // harmless where unsupported; not relied on
       const box = document.createElement('div');
       box.className = 'rows';
       rows.forEach((r) => box.appendChild(r));
       dlg.appendChild(box);
-      dlg.addEventListener('closed', () => {
+      dlg.addEventListener('closed', (ev) => {
+        // Rows (e.g. select menus) fire their own bubbling 'closed' events.
+        if (ev.target !== dlg) return;
+        if (this._dialog?.el === dlg) {
+          this._dialog = null;
+          this._dialogRows = [];
+        }
         dlg.remove();
-        this._dialogRows = [];
       });
+      this._dialog = { el: dlg, kind: 'ha' };
       this.shadowRoot.appendChild(dlg);
       dlg.open = true;
       return;
@@ -1161,21 +1204,27 @@ export class PetFeederCard extends Base {
     // Fallback: a simple in-card overlay.
     const ov = document.createElement('div');
     ov.className = 'overlay';
-    ov.innerHTML = `<div class="panel" role="dialog" aria-label="${title}"><div class="panel-head"><span class="panel-title">${title}</span>
+    ov.innerHTML = `<div class="panel" role="dialog" aria-label="${esc(title)}"><div class="panel-head"><span class="panel-title">${esc(title)}</span>
       <button class="round" data-close title="Close" aria-label="Close"><ha-icon icon="mdi:close"></ha-icon></button></div><div class="rows"></div></div>`;
     const box = ov.querySelector('.rows');
     rows.forEach((r) => box.appendChild(r));
     ov.addEventListener('click', (e) => {
       if (e.target === ov) this._closeControls();
     });
-    this._overlay = ov;
+    this._dialog = { el: ov, kind: 'overlay' };
     this._root.appendChild(ov);
   }
 
+  /** Close and remove the controls dialog, including one still being built. */
   _closeControls() {
-    if (this._overlay) this._overlay.remove();
-    this._overlay = null;
+    this._dialogGen++;
+    this._dialogOpening = null;
+    const d = this._dialog;
+    this._dialog = null;
     this._dialogRows = [];
+    if (!d) return;
+    if (d.kind === 'ha') d.el.open = false; // its 'closed' handler sees _dialog already cleared
+    d.el.remove();
   }
 
   async _createRows(entities) {
