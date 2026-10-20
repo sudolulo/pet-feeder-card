@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pet-feeder-card harness</title>
+<style>
+  body { margin: 0; font-family: Roboto, "Helvetica Neue", Arial, sans-serif; background: #e9e9e9; }
+  /* HA default light / dark theme variables (subset the card uses). */
+  .theme-light {
+    --primary-text-color: #212121; --secondary-text-color: #727272; --card-background-color: #ffffff;
+    --divider-color: rgba(0, 0, 0, 0.12); --success-color: #43a047; --warning-color: #ffa600;
+    --error-color: #db4437; --info-color: #039be5; --state-icon-color: #44739e; --disabled-color: #bdbdbd;
+    --primary-color: #03a9f4; --primary-background-color: #fafafa;
+    background: var(--primary-background-color); color: var(--primary-text-color);
+  }
+  .theme-dark {
+    --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b; --card-background-color: #1c1c1c;
+    --divider-color: rgba(225, 225, 225, 0.12); --success-color: #43a047; --warning-color: #ffa600;
+    --error-color: #db4437; --info-color: #039be5; --state-icon-color: #6fa0d0; --disabled-color: #6f6f6f;
+    --primary-color: #03a9f4; --primary-background-color: #111111;
+    background: var(--primary-background-color); color: var(--primary-text-color);
+  }
+  .grid { display: flex; flex-wrap: wrap; gap: 0; }
+  .cell { width: 460px; padding: 20px; box-sizing: border-box; }
+  .cell h3 { margin: 0 0 10px; font: 500 12px/1 monospace; color: var(--secondary-text-color); }
+  #log { font: 12px monospace; padding: 8px 20px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="grid" class="grid"></div>
+<div id="log"></div>
+<script type="module">
+import { MDI } from './mdi-icons.js';
+import '../card/pet-feeder-card.js';
+
+// --- Minimal stand-ins for HA's ha-card and ha-icon -------------------------
+customElements.define('ha-card', class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = `<style>:host {
+      display: block; background: var(--ha-card-background, var(--card-background-color, #fff));
+      border-radius: var(--ha-card-border-radius, 12px); border: 1px solid var(--divider-color, #e0e0e0);
+      box-shadow: var(--ha-card-box-shadow, none); color: var(--primary-text-color); }</style><slot></slot>`;
+  }
+});
+customElements.define('ha-icon', class extends HTMLElement {
+  static get observedAttributes() { return ['icon']; }
+  connectedCallback() { this._draw(); }
+  attributeChangedCallback() { this._draw(); }
+  _draw() {
+    const name = this.getAttribute('icon');
+    const d = MDI[name];
+    if (!d) throw new Error(`harness: no MDI path for ${name}; add it to harness/mdi-icons.js`);
+    this.style.display = 'inline-flex';
+    this.style.width = this.style.height = 'var(--mdc-icon-size, 24px)';
+    this.innerHTML = `<svg viewBox="0 0 24 24" width="100%" height="100%" fill="currentColor"><path d="${d}"/></svg>`;
+  }
+});
+
+// --- Mock hass ---------------------------------------------------------------
+const NOW = Date.now();
+const iso = (ms) => new Date(ms).toISOString();
+const st = (state, attributes = {}, changedMinsAgo = 5) => ({
+  state: String(state), attributes, last_changed: iso(NOW - changedMinsAgo * 60000), last_updated: iso(NOW - changedMinsAgo * 60000),
+});
+const pad = (n) => String(n).padStart(2, '0');
+const localDateTime = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+};
+
+window.__calls = [];
+function makeHass(states) {
+  return {
+    states,
+    callService(domain, service, data, target) {
+      window.__calls.push({ domain, service, data, target });
+      document.getElementById('log').textContent += `callService ${domain}.${service} ${JSON.stringify(data)} ${JSON.stringify(target)}\n`;
+      return Promise.resolve();
+    },
+  };
+}
+
+// Stand-in for HA's card helpers: rows show the friendly name and state.
+window.loadCardHelpers = async () => ({
+  createRowElement({ entity }) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--divider-color);font-size:15px';
+    Object.defineProperty(row, 'hass', {
+      set(h) {
+        const s = h?.states?.[entity];
+        row.innerHTML = `<span>${s?.attributes?.friendly_name ?? entity}</span><span style="color:var(--secondary-text-color)">${s ? s.state : 'Unknown'}</span>`;
+      },
+    });
+    return row;
+  },
+});
+
+// --- FreshFeed demo helpers (input_* entities that drive a demo device) --------
+const FF = {
+  status: 'input_select.freshfeed_demo_status',
+  food_level: 'input_select.freshfeed_demo_food_level',
+  error: 'input_boolean.freshfeed_demo_fault',
+  last_feed: 'input_number.freshfeed_demo_last_feed',
+  last_fed: 'input_number.freshfeed_demo_last_feed',
+  counter: 'input_number.freshfeed_demo_counter',
+  next_meal: 'input_datetime.freshfeed_demo_next_meal',
+};
+const ffConfig = {
+  type: 'custom:pet-feeder-card',
+  model: 'freshfeed',
+  name: 'FreshFeed',
+  entities: FF,
+  chip: 'last_feed',
+  footer: ['last_fed', 'counter', 'next_meal'],
+  actions: [
+    { name: 'Feed', icon: 'mdi:food-drumstick', action: 'input_select.select_option',
+      target: { entity_id: FF.status }, data: { option: 'feeding' } },
+  ],
+  controls: [FF.status, FF.food_level, FF.error],
+};
+function ffStates({ status, food, fault = 'off', lastFeed = 2, counter = 3 }) {
+  return {
+    [FF.status]: st(status, { friendly_name: 'FreshFeed demo status', options: ['standby', 'feeding', 'feeding_complete', 'no_food'] }),
+    [FF.food_level]: st(food, { friendly_name: 'FreshFeed demo food level', options: ['high', 'low', 'empty'] }),
+    [FF.error]: st(fault, { friendly_name: 'FreshFeed demo fault' }),
+    [FF.last_feed]: st(`${lastFeed}.0`, { friendly_name: 'FreshFeed demo last feed', min: 0, max: 5, step: 1 }, 51),
+    [FF.counter]: st(`${counter}.0`, { friendly_name: 'FreshFeed demo counter', min: 0, max: 5, step: 1 }),
+    [FF.next_meal]: st(localDateTime(NOW + 3 * 3600000 + 20 * 60000), { friendly_name: 'FreshFeed demo next meal', has_date: true, has_time: true }),
+  };
+}
+
+// --- Aqara C1 (real states from the live system) ---------------------------------
+const AQ = {
+  error: 'binary_sensor.cat_feeder_error',
+  food_level: 'sensor.cat_feeder_cat_feeder_classification',
+  // The C1 has no "portions of the last feed" sensor; the configured feeding size
+  // is the closest value for the chip.
+  last_feed: 'sensor.cat_feeder_feeding_size',
+  portions_today: 'sensor.cat_feeder_portions_per_day',
+  weight_today: 'sensor.cat_feeder_weight_per_day',
+  schedule: 'sensor.cat_feeder_schedule',
+  camera: 'camera.cat_feeder',
+};
+const aqConfig = {
+  type: 'custom:pet-feeder-card',
+  model: 'aqara_c1',
+  name: 'Cat Feeder',
+  art_level: 'bowl',
+  food_label: 'Bowl',
+  entities: AQ,
+  chip: 'last_feed',
+  footer: ['next_meal', 'portions_today', 'weight_today'],
+  actions: [
+    { name: 'Feed', icon: 'mdi:food-drumstick', action: 'select.select_option',
+      target: { entity_id: 'select.cat_feeder_feed' }, data: { option: 'START' } },
+  ],
+  controls: ['select.cat_feeder_mode'],
+};
+const SCHEDULE = "[{'days': 'everyday', 'hour': 7, 'minute': 0, 'size': 3}, {'days': 'everyday', 'hour': 10, 'minute': 0, 'size': 3}, {'days': 'everyday', 'hour': 2, 'minute': 0, 'size': 3}, {'days': 'everyday', 'hour': 6, 'minute': 0, 'size': 3}, {'hour': 9, 'size': 3}]";
+function aqStates(classification) {
+  return {
+    [AQ.error]: st('off', { friendly_name: 'Cat feeder error', device_class: 'problem' }),
+    [AQ.food_level]: st(classification, { friendly_name: 'Cat feeder classification', options: ['Full', 'Empty'] }, 51),
+    [AQ.portions_today]: st('17', { friendly_name: 'Cat feeder portions per day' }),
+    [AQ.weight_today]: st('238', { friendly_name: 'Cat feeder weight per day', unit_of_measurement: 'g' }),
+    [AQ.last_feed]: st('3', { friendly_name: 'Cat feeder feeding size', unit_of_measurement: 'portion' }),
+    [AQ.schedule]: st(SCHEDULE, { friendly_name: 'Cat feeder schedule' }),
+    'select.cat_feeder_mode': st('schedule', { friendly_name: 'Cat feeder mode', options: ['schedule', 'manual'] }),
+    'select.cat_feeder_feed': st('unknown', { friendly_name: 'Cat feeder feed', options: ['START'] }),
+    'camera.cat_feeder': st('idle', { friendly_name: 'Cat feeder camera' }),
+  };
+}
+
+export const SCENARIOS = {
+  'freshfeed-ready-high': [ffConfig, ffStates({ status: 'standby', food: 'high' })],
+  'freshfeed-feeding-low': [ffConfig, ffStates({ status: 'feeding', food: 'low', counter: 4 })],
+  'freshfeed-empty': [ffConfig, ffStates({ status: 'no_food', food: 'empty', counter: 5 })],
+  'freshfeed-fault': [ffConfig, ffStates({ status: 'standby', food: 'high', fault: 'on' })],
+  'freshfeed-offline': [ffConfig, Object.fromEntries(Object.entries(ffStates({ status: 'x', food: 'x' })).map(([k, v]) => [k, { ...v, state: 'unavailable' }]))],
+  'aqara-bowl-full': [aqConfig, aqStates('Full')],
+  'aqara-bowl-empty': [aqConfig, aqStates('Empty')],
+  // Extras beyond the spec's list: exercise hopper fill, falling kibble and the
+  // alternate artwork colours.
+  'extra-aqara-hopper-feeding': [
+    { ...aqConfig, name: 'Aqara C1', art_level: 'hopper', food_label: 'Hopper',
+      entities: { ...AQ, status: 'sensor.demo_feeder_status', food_level: 'sensor.demo_hopper_level' } },
+    { ...aqStates('Full'), 'sensor.demo_feeder_status': st('dispensing'), 'sensor.demo_hopper_level': st('35', { unit_of_measurement: '%' }) },
+  ],
+  'extra-freshfeed-white': [{ ...ffConfig, color: 'white' }, ffStates({ status: 'feeding_complete', food: 'high' })],
+  'extra-aqara-black-hopper': [
+    { ...aqConfig, color: 'black', art_level: 'hopper', food_label: 'Hopper', name: 'Aqara C1',
+      entities: { ...AQ, food_level: 'sensor.demo_hopper_level' } },
+    { ...aqStates('Full'), 'sensor.demo_hopper_level': st('80', { unit_of_measurement: '%' }) },
+  ],
+};
+
+// --- Render the grid -------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const only = params.get('scenario');
+if (params.get('narrow')) document.styleSheets[0].insertRule('.cell { width: 320px !important; }');
+const grid = document.getElementById('grid');
+for (const theme of ['light', 'dark']) {
+  for (const [name, [config, states]] of Object.entries(SCENARIOS)) {
+    if (only && only !== name) continue;
+    const cell = document.createElement('div');
+    cell.className = `cell theme-${theme}`;
+    cell.dataset.shot = `${name}-${theme}`;
+    cell.innerHTML = `<h3>${name} / ${theme}</h3>`;
+    const card = document.createElement('pet-feeder-card');
+    card.setConfig(structuredClone(config));
+    card.hass = makeHass(states);
+    cell.appendChild(card);
+    grid.appendChild(cell);
+  }
+}
+window.__harness = { SCENARIOS, makeHass, ffConfig, aqConfig, ffStates, aqStates };
+window.__ready = true;
+</script>
+</body>
+</html>
