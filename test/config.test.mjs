@@ -53,6 +53,25 @@ test('actions default confirm to true and keep explicit false', () => {
   assert.equal(c.actions[1].icon, 'mdi:gesture-tap-button');
 });
 
+test('meal_slots defaults to 6 for freshfeed and is unset for aqara_c1', () => {
+  assert.equal(validateConfig({ model: 'freshfeed' }).meal_slots, 6);
+  assert.equal(validateConfig({ model: 'aqara_c1' }).meal_slots, null);
+  assert.equal(validateConfig({ model: 'freshfeed', meal_slots: 4 }).meal_slots, 4);
+  assert.equal(validateConfig({ model: 'aqara_c1', meal_slots: 12 }).meal_slots, 12);
+  assert.equal(validateConfig({ model: 'freshfeed', meal_slots: 1 }).meal_slots, 1);
+});
+
+test('meal_slots outside 1-12 or not an integer throws a readable error', () => {
+  for (const bad of [0, 13, -1, 2.5, '6', 'six', true]) {
+    assert.throws(() => validateConfig({ model: 'freshfeed', meal_slots: bad }), /meal_slots must be an integer from 1 to 12/, String(bad));
+  }
+});
+
+test('meals_left is an accepted entity key', () => {
+  const c = validateConfig({ model: 'freshfeed', entities: { meals_left: 'sensor.meals_left' } });
+  assert.equal(c.entities.meals_left, 'sensor.meals_left');
+});
+
 test('invalid action, colour, art_level and limits throw', () => {
   assert.throws(() => validateConfig({ model: 'freshfeed', actions: [{ action: 'nodot' }] }), /domain\.service/);
   assert.throws(() => validateConfig({ model: 'freshfeed', color: 'pink' }), /color/);

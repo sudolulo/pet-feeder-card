@@ -27,6 +27,7 @@ Match its structure and polish:
    width); a pill-shaped chip on the left edge, vertically lower-middle, with an icon + value.
 3. Gauges: uppercase small label ("FOOD", or the configured label) above a rounded 8px bar.
    Bar colour: green >= 50%, amber 20-49%, red < 20%. Optional percentage text.
+   When the meal tray applies (see below) it replaces the food gauge in this area.
 4. Footer below a divider: 2-3 items, each `icon + value` (relative time strings like
    "51 minutes ago" for timestamps).
 
@@ -59,6 +60,8 @@ name: FreshFeed             # optional, default from model
 color: black                # optional artwork colour: black | white
 food_label: Food            # optional gauge label
 art_level: hopper           # aqara only: hopper | bowl
+meal_slots: 6               # optional meal-tray compartments, integer 1-12
+                            # (default 6 for freshfeed; aqara_c1 has no default -> no tray)
 entities:                   # every key optional; card renders what is configured
   status: sensor.x          # raw status string (see normalisation)
   food_level: sensor.x      # enum string or numeric 0-100
@@ -67,7 +70,8 @@ entities:                   # every key optional; card renders what is configure
   last_fed: sensor.x        # timestamp state; if state is not a timestamp, use last_changed
   portions_today: sensor.x
   weight_today: sensor.x
-  counter: sensor.x         # meals delivered
+  counter: sensor.x         # meals delivered since the last refill (drives the meal tray)
+  meals_left: sensor.x      # alternative for the meal tray: meals remaining; counter wins if both
   schedule: sensor.x        # Aqara/Zigbee2MQTT schedule string, used to compute next meal
   next_meal: sensor.x       # alternative: timestamp/datetime state (input_datetime too)
   temperature: sensor.x
@@ -89,6 +93,31 @@ controls:                   # entity ids listed in the controls dialog (menu but
 `--warning-color`, icon `mdi:check`, tooltip "Tap again to confirm") for 4 seconds; a second
 tap within that window calls the service; otherwise it disarms. Never dispense on one tap
 unless `confirm: false`.
+
+### Meal tray
+
+The FreshFeed holds 6 meal compartments that rotate to the serving window in order 1..6;
+the device counts meals delivered since the last refill (reset on refill). When
+`meal_slots` is set (default for `freshfeed`) and a `counter` or `meals_left` entity is
+configured, the gauge area shows a meal tray instead of the food gauge (`food_level` still
+drives the status and the LED colour). Same 60% width as the gauges:
+
+- Header like a gauge: uppercase `MEALS` on the left, on the right "4 of 6 left",
+  "Last meal" (1 left), "Refill needed" (0 left) or "Unknown", coloured green when 3 or more
+  are left, amber at 1-2, red at 0, neutral when unknown (the gauge colour variables).
+- A row of `meal_slots` equal rounded tiles (gap 6px, 34px high, radius 9px), numbered:
+  - full: warm wet-food gradient (`#d9874a` -> `#a85a2b`) with highlight dots, white number;
+  - serving: the same food at reduced saturation, a 2px `--info-color` ring and
+    `mdi:silverware-fork-knife` instead of the number (title "Meal N is in the serving window");
+  - eaten: hollow, 1.5px dashed `--divider-color` border, number in
+    `--secondary-text-color` and a faint `mdi:check`;
+  - unknown: hollow dashed with "?".
+- The next compartment (first full one) has a caption below it: the next meal time in 24h
+  `HH:MM` local when `next_meal` (or an Aqara `schedule`) is configured and known, else "next".
+- Tile titles read "Meal 4 - full", "Meal 2 - eaten". The whole row is one tap target that
+  fires `hass-more-info` for the counter (or meals_left) entity.
+- Below a 220px tray width (narrow cards) the gap, tile height and font shrink so six tiles
+  fit inside a 320px-wide card.
 
 Tapping the status icon, the chip, a gauge or a footer item fires `hass-more-info` for the
 underlying entity. The controls dialog: an `ha-dialog` (or a simple in-card overlay if
@@ -130,6 +159,17 @@ Missing `minute` -> 0, missing `days` -> 'everyday', missing size -> 1. Invalid 
 strictly after `now` within the next 7 days. Supported `days` values (Zigbee2MQTT Aqara C1):
 `everyday`, `workdays` (Mon-Fri), `weekend` (Sat-Sun), single days `mon`..`sun`, and
 hyphen-joined day lists such as `mon-wed-fri-sun`, `tue-thu-sat`. Uses local time.
+
+`mealSlots({ slots, delivered, left })` -> `{ slots: [{ n, state, next }], left, delivered, known }`.
+`delivered` (meals served since the refill) and `left` (meals remaining) are numbers or
+null; `delivered` wins when both are given, otherwise `delivered = slots - left`. The result
+is clamped to 0..slots. With neither a finite `delivered` nor `left` (unavailable,
+non-numeric) -> `known: false`, `left`/`delivered` null and every slot state `unknown`.
+Slot states: `n < delivered` -> `eaten`; `n == delivered` (delivered >= 1) -> `serving` (that
+compartment is in the window now); `n > delivered` -> `full`. `next` is true only on the
+first `full` slot. `buildModel` exposes the tray as `meals: { entity, slots, left, total,
+label, text, color }`, each slot carrying `time` (the `HH:MM` label on the next slot, else
+null).
 
 `relativeTime(date, now)` -> "just now" (<45s), "N minutes ago", "N hours ago", "N days ago",
 and for future dates "in N minutes" / "in N hours" / "tomorrow at 07:00"-style is NOT needed:

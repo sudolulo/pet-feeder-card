@@ -201,12 +201,64 @@ export function relativeTime(date, now = new Date()) {
   return diff < 0 ? `${text} ago` : `in ${text}`;
 }
 
+const GAUGE = {
+  unknown: 'var(--disabled-color, #bdbdbd)',
+  good: 'var(--success-color, #43a047)',
+  low: 'var(--warning-color, #ffa600)',
+  out: 'var(--error-color, #db4437)',
+};
+
 /** Gauge bar colour: green >= 50, amber 20-49, red < 20, neutral when unknown. */
 export function gaugeColor(pct) {
-  if (pct == null) return 'var(--disabled-color, #bdbdbd)';
-  if (pct >= 50) return 'var(--success-color, #43a047)';
-  if (pct >= 20) return 'var(--warning-color, #ffa600)';
-  return 'var(--error-color, #db4437)';
+  if (pct == null) return GAUGE.unknown;
+  if (pct >= 50) return GAUGE.good;
+  if (pct >= 20) return GAUGE.low;
+  return GAUGE.out;
+}
+
+/** Meal tray colour: green >= 3 meals left, amber 1-2, red 0, neutral when unknown. */
+function mealsColor(left) {
+  if (left == null) return GAUGE.unknown;
+  if (left >= 3) return GAUGE.good;
+  if (left >= 1) return GAUGE.low;
+  return GAUGE.out;
+}
+
+/** A finite number from a number or numeric string; null for null/''/non-numeric. */
+function finiteOrNull(v) {
+  if (v == null || v === '' || typeof v === 'boolean') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Compartment tray of a rotating wet-food feeder (FreshFeed: 6 compartments that
+ * reach the serving window in order 1..slots). `delivered` counts meals served since
+ * the last refill; `left` is the alternative "remaining" reading, used only when
+ * `delivered` is not given. The compartment numbered `delivered` is the one in the
+ * serving window now; earlier ones were eaten, later ones are still full.
+ * Returns { slots: [{ n, state, next }], left, delivered, known }.
+ */
+export function mealSlots({ slots, delivered, left }) {
+  const total = Math.max(0, Math.round(Number(slots) || 0));
+  const d = finiteOrNull(delivered);
+  const l = finiteOrNull(left);
+  let served = d != null ? d : l != null ? total - l : null;
+  if (served == null) {
+    return {
+      slots: Array.from({ length: total }, (_, i) => ({ n: i + 1, state: 'unknown', next: false })),
+      left: null,
+      delivered: null,
+      known: false,
+    };
+  }
+  served = Math.min(total, Math.max(0, Math.round(served)));
+  const out = [];
+  for (let n = 1; n <= total; n++) {
+    const state = n < served ? 'eaten' : n === served ? 'serving' : 'full';
+    out.push({ n, state, next: n === served + 1 }); // first full compartment
+  }
+  return { slots: out, left: total - served, delivered: served, known: true };
 }
 
 /**
@@ -224,9 +276,10 @@ export function ledColor(statusKey, foodPct) {
 // Configuration
 // ---------------------------------------------------------------------------
 
+// meal_slots: compartments in the meal tray (null = model has no tray by default).
 export const MODELS = {
-  freshfeed: { name: 'FreshFeed', color: 'black' },
-  aqara_c1: { name: 'Aqara C1', color: 'white' },
+  freshfeed: { name: 'FreshFeed', color: 'black', meal_slots: 6 },
+  aqara_c1: { name: 'Aqara C1', color: 'white', meal_slots: null },
 };
 
 export const ENTITY_KEYS = [
@@ -238,6 +291,7 @@ export const ENTITY_KEYS = [
   'portions_today',
   'weight_today',
   'counter',
+  'meals_left',
   'schedule',
   'next_meal',
   'temperature',
@@ -259,6 +313,7 @@ export function validateConfig(config) {
   const c = {
     name: model.name,
     color: model.color,
+    meal_slots: model.meal_slots,
     food_label: 'Food',
     art_level: 'hopper',
     chip: 'last_feed',
@@ -270,6 +325,11 @@ export function validateConfig(config) {
   }
   if (!['hopper', 'bowl'].includes(c.art_level)) {
     throw new Error(`pet-feeder-card: art_level must be hopper or bowl, got '${c.art_level}'`);
+  }
+  if (c.meal_slots == null) {
+    c.meal_slots = null;
+  } else if (!Number.isInteger(c.meal_slots) || c.meal_slots < 1 || c.meal_slots > 12) {
+    throw new Error(`pet-feeder-card: meal_slots must be an integer from 1 to 12, got '${c.meal_slots}'`);
   }
   if (c.entities != null && (typeof c.entities !== 'object' || Array.isArray(c.entities))) {
     throw new Error('pet-feeder-card: entities must be a mapping of key -> entity_id');
@@ -399,9 +459,43 @@ export function buildModel(config, hass, now = new Date()) {
     food = { label: config.food_label, pct: lvl.pct, text: lvl.label, color: gaugeColor(lvl.pct), entity: ent.food_level };
   }
 
+  // --- next meal: a next_meal entity, else an Aqara schedule -------------------------
+  const nextMealKey = !ent.next_meal && ent.schedule ? 'schedule' : 'next_meal';
+  const nextMealDate = (so) => {
+    if (!so || UNAVAILABLE.has(String(so.state).toLowerCase())) return null;
+    if (nextMealKey === 'schedule') return nextMeal(parseAqaraSchedule(so.state), now)?.at ?? null;
+    return parseStateDate(so.state, now) || toDate(so.attributes?.timestamp && so.attributes.timestamp * 1000);
+  };
+
+  // --- meal tray ---------------------------------------------------------------------
+  let meals = null;
+  const mealsKey = ent.counter ? 'counter' : ent.meals_left ? 'meals_left' : null; // counter wins
+  if (config.meal_slots && mealsKey) {
+    const raw = get(mealsKey)?.state;
+    const reading = raw == null || UNAVAILABLE.has(String(raw).toLowerCase()) ? null : raw;
+    const tray = mealSlots({
+      slots: config.meal_slots,
+      delivered: mealsKey === 'counter' ? reading : null,
+      left: mealsKey === 'meals_left' ? reading : null,
+    });
+    const at = nextMealDate(get(nextMealKey));
+    const time = at ? `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}` : null;
+    let text = 'Unknown';
+    if (tray.known) text = tray.left === 0 ? 'Refill needed' : tray.left === 1 ? 'Last meal' : `${tray.left} of ${config.meal_slots} left`;
+    meals = {
+      entity: ent[mealsKey],
+      slots: tray.slots.map((s) => ({ ...s, time: s.next ? time : null })),
+      left: tray.left,
+      total: config.meal_slots,
+      label: 'Meals',
+      text,
+      color: mealsColor(tray.left),
+    };
+  }
+
   // --- value items (chip + footer) ------------------------------------------------
   const item = (key) => {
-    const entityKey = key === 'next_meal' && !ent.next_meal && ent.schedule ? 'schedule' : key;
+    const entityKey = key === 'next_meal' ? nextMealKey : key;
     const entity = ent[entityKey];
     if (!entity) return null; // not configured -> hidden
     const so = states[entity];
@@ -413,9 +507,7 @@ export function buildModel(config, hass, now = new Date()) {
       const d = parseStateDate(so.state, now) || toDate(so.last_changed);
       value = d ? relativeTime(d, now) : 'Unknown';
     } else if (key === 'next_meal') {
-      let d = null;
-      if (entityKey === 'schedule') d = nextMeal(parseAqaraSchedule(so.state), now)?.at ?? null;
-      else d = parseStateDate(so.state, now) || toDate(so.attributes?.timestamp && so.attributes.timestamp * 1000);
+      const d = nextMealDate(so);
       value = d ? relativeTime(d, now) : 'None scheduled';
     } else {
       value = formatValue(key, so);
@@ -430,6 +522,7 @@ export function buildModel(config, hass, now = new Date()) {
     name: config.name,
     status,
     food,
+    meals,
     chip,
     footer,
     camera: ent.camera || null,
@@ -810,7 +903,7 @@ export function renderArt(art) {
 // Custom element
 // ---------------------------------------------------------------------------
 
-const CARD_VERSION = '0.1.0';
+const CARD_VERSION = '0.2.0';
 const CONFIRM_MS = 4000;
 const TICK_MS = 60000; // refresh relative times once a minute
 
@@ -903,6 +996,47 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
 .gauge-text { font-size: 13px; color: var(--secondary-text-color, #727272); }
 .bar { height: 8px; border-radius: 4px; background: var(--divider-color, rgba(0,0,0,.12)); overflow: hidden; }
 .bar > div { height: 100%; border-radius: 4px; transition: width .6s ease; }
+/* Meal tray: one tile per compartment, in serving order. Food colours are fixed
+   (product colours); every chrome colour is a theme variable. */
+.meals { container: meals / inline-size; }
+.meals .gauge-head { margin-bottom: 8px; }
+.meal-row { display: grid; grid-template-columns: repeat(var(--meal-count, 6), minmax(0, 1fr)); gap: 6px; }
+.meal-slot { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.meal-tile {
+  position: relative; box-sizing: border-box; width: 100%; height: 34px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  font-size: 14px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.meal-tile.full {
+  color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35);
+  background:
+    radial-gradient(circle at 24% 30%, rgba(255,255,255,.55) 0 1.4px, transparent 2px),
+    radial-gradient(circle at 70% 24%, rgba(255,255,255,.4) 0 1.1px, transparent 1.7px),
+    radial-gradient(circle at 78% 72%, rgba(255,255,255,.35) 0 1.3px, transparent 1.9px),
+    linear-gradient(160deg, #d9874a, #a85a2b);
+}
+.meal-tile.serving {
+  color: #fff;
+  background: linear-gradient(160deg, hsl(26 34% 58%), hsl(22 30% 42%));
+  box-shadow: 0 0 0 1.5px var(--card-background-color, #fff), 0 0 0 3.5px var(--info-color, #039be5);
+}
+.meal-tile.serving ha-icon { --mdc-icon-size: 18px; }
+.meal-tile.eaten, .meal-tile.unknown {
+  background: transparent; border: 1.5px dashed var(--divider-color, rgba(0,0,0,.12));
+  color: var(--secondary-text-color, #727272); font-weight: 500;
+}
+.meal-tile.eaten ha-icon { position: absolute; right: 2px; bottom: 2px; --mdc-icon-size: 11px; opacity: .5; }
+.meal-cap {
+  height: 14px; margin-top: 4px; font-size: 11px; line-height: 14px; white-space: nowrap;
+  color: var(--secondary-text-color, #727272);
+}
+@container meals (max-width: 220px) {
+  .meal-row { gap: 4px; }
+  .meal-tile { height: 28px; border-radius: 7px; font-size: 12px; }
+  .meal-tile.serving ha-icon { --mdc-icon-size: 15px; }
+  .meal-tile.eaten ha-icon { --mdc-icon-size: 9px; right: 1px; bottom: 1px; }
+  .meal-cap { font-size: 10px; margin-top: 3px; }
+}
 .footer {
   display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 12px;
   padding: 14px 24px 16px; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12));
@@ -1089,6 +1223,33 @@ export class PetFeederCard extends Base {
          </div>`
       : '';
 
+    // The meal tray takes the food gauge's place; food_level still drives status and LED.
+    const mealTile = (s) => {
+      let title = `Meal ${s.n} - ${s.state}`;
+      let glyph = String(s.n);
+      if (s.state === 'serving') {
+        title = `Meal ${s.n} is in the serving window`;
+        glyph = icon('mdi:silverware-fork-knife');
+      } else if (s.state === 'eaten') {
+        glyph = `${s.n}${icon('mdi:check')}`;
+      } else if (s.state === 'unknown') {
+        glyph = '?';
+      } else if (s.next) {
+        title += s.time ? `, next at ${s.time}` : ', next';
+      }
+      const next = s.next ? ' next' : '';
+      return (
+        `<div class="meal-slot${next}"><div class="meal-tile ${s.state}${next}" data-state="${s.state}" title="${esc(title)}">${glyph}</div>` +
+        `<div class="meal-cap">${s.next ? esc(s.time || 'next') : ''}</div></div>`
+      );
+    };
+    const tray = m.meals
+      ? `<div class="gauge meals"${more(m.meals.entity)} aria-label="${esc(m.meals.label)}: ${esc(m.meals.text)}">
+           <div class="gauge-head"><span class="gauge-label">${esc(m.meals.label)}</span><span class="gauge-text" style="color:${m.meals.color}">${esc(m.meals.text)}</span></div>
+           <div class="meal-row" style="--meal-count:${m.meals.total}">${m.meals.slots.map(mealTile).join('')}</div>
+         </div>`
+      : '';
+
     // innerHTML replaces every element; remember which action button had keyboard
     // focus so a keyboard user can confirm an armed action with a second Enter/Space.
     const focusedAction = this.shadowRoot.activeElement?.dataset?.action;
@@ -1113,7 +1274,7 @@ export class PetFeederCard extends Base {
         <div class="art">${renderArt(m.art)}</div>
         ${m.chip ? `<div class="chip"${more(m.chip.entity)} title="${esc(m.chip.key.replace(/_/g, ' '))}">${icon(m.chip.icon)}<span>${esc(m.chip.value)}</span></div>` : ''}
       </div>
-      ${gauge ? `<div class="gauges">${gauge}</div>` : ''}
+      ${tray || gauge ? `<div class="gauges">${tray || gauge}</div>` : ''}
       ${footer}`;
     if (this._dialog) this._root.appendChild(this._dialog.el); // keep the open overlay after re-render
     if (focusedAction != null) {

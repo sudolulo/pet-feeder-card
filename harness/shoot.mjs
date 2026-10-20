@@ -189,6 +189,32 @@ try {
     out.eightControlPanelScrollable = getComputedStyle(panel).overflowY === 'auto';
     eight.remove();
 
+    // meal tray: counter of 2 delivered out of 6
+    const tray = document.createElement('pet-feeder-card');
+    tray.setConfig(structuredClone(ffConfig));
+    tray.hass = makeHass(ffStates({ status: 'standby', food: 'high', counter: 2 }));
+    host.appendChild(tray);
+    const tiles = () => [...tray.shadowRoot.querySelectorAll('.meals .meal-tile')];
+    out.trayTileCount = tiles().length;
+    out.trayStates = tiles().map((t) => t.dataset.state);
+    out.trayNext = tiles()
+      .map((t, i) => (t.classList.contains('next') ? i + 1 : null))
+      .filter(Boolean);
+    out.trayNextCaption = tray.shadowRoot.querySelector('.meals .meal-slot.next .meal-cap')?.textContent.trim();
+    out.trayTitles = tiles().map((t) => t.title);
+    out.trayText = text(tray, '.meals .gauge-text');
+    out.trayLabel = text(tray, '.meals .gauge-label');
+    out.trayReplacesFoodBar = !tray.shadowRoot.querySelector('.bar');
+    let trayMore = null;
+    tray.addEventListener('hass-more-info', (ev) => (trayMore = ev.detail.entityId));
+    tiles()[4]?.click(); // a tap anywhere on the row
+    out.trayMoreInfo = trayMore;
+    // counter unavailable -> every tile unknown, "Unknown"
+    tray.hass = makeHass({ ...ffStates({ status: 'standby', food: 'high' }), [ffConfig.entities.counter]: { state: 'unavailable', attributes: {} } });
+    out.trayUnknownStates = tiles().map((t) => t.dataset.state);
+    out.trayUnknownText = text(tray, '.meals .gauge-text');
+    out.trayUnknownGlyphs = tiles().map((t) => t.textContent.trim());
+
     // stub config renders
     const e = document.createElement('pet-feeder-card');
     e.setConfig(customElements.get('pet-feeder-card').getStubConfig());
@@ -231,6 +257,20 @@ try {
   check(r.overlayAfterDisconnect === 0 && r.rowsAfterDisconnect === 0, `real disconnect removes controls and rows (overlays ${r.overlayAfterDisconnect}, rows ${r.rowsAfterDisconnect})`);
   check(r.armedAfterDisconnect, 'real disconnect disarms the confirm action');
   check(r.eightControlPanelInsideCard && r.eightControlPanelScrollable, `eight-control panel stays inside a 600px card and scrolls (inside ${r.eightControlPanelInsideCard}, scrollable ${r.eightControlPanelScrollable})`);
+  check(r.trayTileCount === 6, `meal tray shows 6 compartment tiles (got ${r.trayTileCount})`);
+  check(
+    JSON.stringify(r.trayStates) === JSON.stringify(['eaten', 'serving', 'full', 'full', 'full', 'full']),
+    `delivered=2 tile states (got ${JSON.stringify(r.trayStates)})`,
+  );
+  check(JSON.stringify(r.trayNext) === '[3]' && r.trayNextCaption != null && r.trayNextCaption !== '', `next marker on tile 3 with a caption (got ${JSON.stringify(r.trayNext)}, caption ${r.trayNextCaption})`);
+  check(r.trayTitles[0] === 'Meal 1 - eaten' && r.trayTitles[1] === 'Meal 2 is in the serving window' && r.trayTitles[3] === 'Meal 4 - full', `tile titles (got ${JSON.stringify(r.trayTitles)})`);
+  check(r.trayText === '4 of 6 left' && r.trayLabel === 'Meals', `tray header reads "Meals / 4 of 6 left" (got ${r.trayLabel} / ${r.trayText})`);
+  check(r.trayReplacesFoodBar, 'meal tray replaces the food gauge bar');
+  check(r.trayMoreInfo === 'input_number.freshfeed_demo_counter', `tapping the tray fires hass-more-info for the counter (got ${r.trayMoreInfo})`);
+  check(
+    JSON.stringify(r.trayUnknownStates) === JSON.stringify(Array(6).fill('unknown')) && r.trayUnknownText === 'Unknown' && r.trayUnknownGlyphs.every((g) => g === '?'),
+    `unavailable counter -> all tiles unknown "?" and "Unknown" (got ${JSON.stringify(r.trayUnknownStates)}, ${r.trayUnknownText}, ${JSON.stringify(r.trayUnknownGlyphs)})`,
+  );
   check(r.stub === 'FreshFeed' && r.size === 7, `stub config renders (got ${r.stub}, size ${r.size})`);
   check(r.grid === '{"columns":12,"min_columns":6,"rows":"auto"}', `grid options (got ${r.grid})`);
   check(r.customCards.includes('"type":"pet-feeder-card"'), 'registered in window.customCards');
@@ -303,6 +343,28 @@ try {
     const narrow = await ctx.newPage();
     await narrow.goto(`${BASE}?scenario=${scenario}&narrow=1`);
     await narrow.waitForFunction(() => window.__ready === true);
+    if (scenario.startsWith('freshfeed')) {
+      // Every compartment tile (and its caption) stays inside the 320px card, and no
+      // tile's content is clipped.
+      const fit = await narrow.evaluate(() => {
+        const card = document.querySelector('.cell.theme-light pet-feeder-card');
+        const box = card.shadowRoot.querySelector('ha-card').getBoundingClientRect();
+        const inside = (r) => r.left >= box.left && r.right <= box.right && r.top >= box.top && r.bottom <= box.bottom;
+        const tiles = [...card.shadowRoot.querySelectorAll('.meal-tile')];
+        const caps = [...card.shadowRoot.querySelectorAll('.meal-cap')].filter((c) => c.textContent.trim());
+        return {
+          cardWidth: Math.round(box.width),
+          tiles: tiles.length,
+          outside: [...tiles, ...caps].filter((el) => !inside(el.getBoundingClientRect())).length,
+          clipped: tiles.filter((t) => t.scrollWidth > t.clientWidth || t.scrollHeight > t.clientHeight).length,
+          overlapping: tiles.slice(1).filter((t, i) => t.getBoundingClientRect().left < tiles[i].getBoundingClientRect().right).length,
+        };
+      });
+      check(
+        fit.tiles === 6 && fit.outside === 0 && fit.clipped === 0 && fit.overlapping === 0,
+        `narrow ${fit.cardWidth}px card: ${fit.tiles} tiles, none outside the card (${fit.outside}), clipped (${fit.clipped}) or overlapping (${fit.overlapping})`,
+      );
+    }
     const file = path.join(OUT, `extra-narrow-${scenario}-light.png`);
     await narrow.locator('.cell.theme-light').screenshot({ path: file });
     written.push(file);

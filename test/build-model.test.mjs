@@ -152,6 +152,106 @@ test('next_meal from a time-only input_datetime rolls to tomorrow when past', ()
   assert.equal(buildModel(cfg, hass, now).footer[0].value, 'in 19 hours');
 });
 
+// --- meal tray -----------------------------------------------------------------
+
+const mealCfg = (entities, over = {}) => validateConfig({ model: 'freshfeed', entities, ...over });
+const COUNTER = 'input_number.freshfeed_demo_counter';
+const LEFT = 'sensor.freshfeed_meals_left';
+const NEXT = 'input_datetime.freshfeed_demo_next_meal';
+
+test('meals: counter of 2 delivered -> "4 of 6 left", green, next slot carries the next-meal time', () => {
+  const cfg = mealCfg({ counter: COUNTER, next_meal: NEXT });
+  const m = buildModel(cfg, { states: { [COUNTER]: st('2.0'), [NEXT]: st('2026-10-20 18:00:00') } }, now);
+  assert.equal(m.meals.entity, COUNTER);
+  assert.equal(m.meals.label, 'Meals');
+  assert.equal(m.meals.total, 6);
+  assert.equal(m.meals.left, 4);
+  assert.equal(m.meals.text, '4 of 6 left');
+  assert.equal(m.meals.color, 'var(--success-color, #43a047)');
+  assert.deepEqual(
+    m.meals.slots.map((s) => [s.n, s.state, s.next, s.time]),
+    [
+      [1, 'eaten', false, null],
+      [2, 'serving', false, null],
+      [3, 'full', true, '18:00'],
+      [4, 'full', false, null],
+      [5, 'full', false, null],
+      [6, 'full', false, null],
+    ],
+  );
+});
+
+test('meals: time label is 24h HH:MM and absent when next_meal is not configured or unknown', () => {
+  const morning = buildModel(mealCfg({ counter: COUNTER, next_meal: NEXT }), { states: { [COUNTER]: st('0'), [NEXT]: st('07:05:00') } }, now);
+  assert.equal(morning.meals.slots[0].time, '07:05');
+  const none = buildModel(mealCfg({ counter: COUNTER }), { states: { [COUNTER]: st('0') } }, now);
+  assert.equal(none.meals.slots[0].time, null);
+  const unknown = buildModel(mealCfg({ counter: COUNTER, next_meal: NEXT }), { states: { [COUNTER]: st('0'), [NEXT]: st('unavailable') } }, now);
+  assert.equal(unknown.meals.slots[0].time, null);
+});
+
+test('meals: text and colour by meals left', () => {
+  const at = (delivered) => buildModel(mealCfg({ counter: COUNTER }), { states: { [COUNTER]: st(String(delivered)) } }, now).meals;
+  assert.equal(at(3).text, '3 of 6 left');
+  assert.equal(at(3).color, 'var(--success-color, #43a047)');
+  assert.equal(at(4).text, '2 of 6 left');
+  assert.equal(at(4).color, 'var(--warning-color, #ffa600)');
+  assert.equal(at(5).text, 'Last meal');
+  assert.equal(at(5).color, 'var(--warning-color, #ffa600)');
+  assert.equal(at(6).text, 'Refill needed');
+  assert.equal(at(6).color, 'var(--error-color, #db4437)');
+  assert.equal(at(6).left, 0);
+});
+
+test('meals: unavailable or missing counter -> Unknown, all slots unknown, neutral colour', () => {
+  for (const states of [{ [COUNTER]: st('unavailable') }, {}]) {
+    const m = buildModel(mealCfg({ counter: COUNTER }), { states }, now).meals;
+    assert.equal(m.text, 'Unknown');
+    assert.equal(m.left, null);
+    assert.equal(m.color, 'var(--disabled-color, #bdbdbd)');
+    assert.deepEqual(
+      m.slots.map((s) => s.state),
+      Array(6).fill('unknown'),
+    );
+  }
+  // hass not set yet
+  assert.equal(buildModel(mealCfg({ counter: COUNTER }), undefined, now).meals.text, 'Unknown');
+});
+
+test('meals: meals_left alone drives the tray', () => {
+  const m = buildModel(mealCfg({ meals_left: LEFT }), { states: { [LEFT]: st('1') } }, now).meals;
+  assert.equal(m.entity, LEFT);
+  assert.equal(m.left, 1);
+  assert.equal(m.text, 'Last meal');
+  assert.deepEqual(
+    m.slots.map((s) => s.state),
+    ['eaten', 'eaten', 'eaten', 'eaten', 'serving', 'full'],
+  );
+});
+
+test('meals: counter wins when both counter and meals_left are configured', () => {
+  const m = buildModel(mealCfg({ counter: COUNTER, meals_left: LEFT }), { states: { [COUNTER]: st('2'), [LEFT]: st('1') } }, now).meals;
+  assert.equal(m.entity, COUNTER);
+  assert.equal(m.left, 4);
+});
+
+test('meals: absent without a counter/meals_left entity, or without meal_slots (aqara default)', () => {
+  assert.equal(buildModel(mealCfg({ food_level: 'sensor.f' }), { states: {} }, now).meals, null);
+  const aq = validateConfig({ model: 'aqara_c1', entities: { counter: COUNTER } });
+  assert.equal(buildModel(aq, { states: { [COUNTER]: st('2') } }, now).meals, null);
+  const aq4 = validateConfig({ model: 'aqara_c1', meal_slots: 4, entities: { counter: COUNTER } });
+  const m = buildModel(aq4, { states: { [COUNTER]: st('1') } }, now).meals;
+  assert.equal(m.total, 4);
+  assert.equal(m.text, '3 of 4 left');
+});
+
+test('meals: custom meal_slots count', () => {
+  const m = buildModel(mealCfg({ counter: COUNTER }, { meal_slots: 3 }), { states: { [COUNTER]: st('3') } }, now).meals;
+  assert.equal(m.total, 3);
+  assert.equal(m.slots.length, 3);
+  assert.equal(m.text, 'Refill needed');
+});
+
 test('camera entity is exposed for the camera button', () => {
   const cfg = validateConfig({ model: 'aqara_c1', entities: { camera: 'camera.cat' } });
   assert.equal(buildModel(cfg, { states: {} }, now).camera, 'camera.cat');

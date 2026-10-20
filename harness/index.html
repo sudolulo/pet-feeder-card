@@ -120,12 +120,13 @@ const ffConfig = {
   controls: [FF.status, FF.food_level, FF.error],
 };
 function ffStates({ status, food, fault = 'off', lastFeed = 2, counter = 3 }) {
+  // counter = meals delivered since the last refill (FreshFeed holds 6).
   return {
     [FF.status]: st(status, { friendly_name: 'FreshFeed demo status', options: ['standby', 'feeding', 'feeding_complete', 'no_food'] }),
     [FF.food_level]: st(food, { friendly_name: 'FreshFeed demo food level', options: ['high', 'low', 'empty'] }),
     [FF.error]: st(fault, { friendly_name: 'FreshFeed demo fault' }),
     [FF.last_feed]: st(`${lastFeed}.0`, { friendly_name: 'FreshFeed demo last feed', min: 0, max: 5, step: 1 }, 51),
-    [FF.counter]: st(`${counter}.0`, { friendly_name: 'FreshFeed demo counter', min: 0, max: 5, step: 1 }),
+    [FF.counter]: st(counter === 'unavailable' ? counter : `${counter}.0`, { friendly_name: 'FreshFeed demo counter', min: 0, max: 6, step: 1 }),
     [FF.next_meal]: st(localDateTime(NOW + 3 * 3600000 + 20 * 60000), { friendly_name: 'FreshFeed demo next meal', has_date: true, has_time: true }),
   };
 }
@@ -173,10 +174,10 @@ function aqStates(classification) {
 }
 
 export const SCENARIOS = {
-  'freshfeed-ready-high': [ffConfig, ffStates({ status: 'standby', food: 'high' })],
+  'freshfeed-ready-high': [ffConfig, ffStates({ status: 'standby', food: 'high', counter: 2 })],
   'freshfeed-feeding-low': [ffConfig, ffStates({ status: 'feeding', food: 'low', counter: 4 })],
-  'freshfeed-empty': [ffConfig, ffStates({ status: 'no_food', food: 'empty', counter: 5 })],
-  'freshfeed-fault': [ffConfig, ffStates({ status: 'standby', food: 'high', fault: 'on' })],
+  'freshfeed-empty': [ffConfig, ffStates({ status: 'no_food', food: 'empty', counter: 6 })],
+  'freshfeed-fault': [ffConfig, ffStates({ status: 'standby', food: 'high', fault: 'on', counter: 1 })],
   'freshfeed-offline': [ffConfig, Object.fromEntries(Object.entries(ffStates({ status: 'x', food: 'x' })).map(([k, v]) => [k, { ...v, state: 'unavailable' }]))],
   'aqara-bowl-full': [aqConfig, aqStates('Full')],
   'aqara-bowl-empty': [aqConfig, aqStates('Empty')],
