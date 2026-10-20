@@ -5,7 +5,7 @@
   "description": "Home Assistant Lovelace custom card for pet feeders (PetSafe FreshFeed, Aqara C1)",
   "type": "module",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "shoot": "node harness/shoot.mjs"
   },
   "devDependencies": {
