@@ -83,9 +83,10 @@ const dlg = await ff.evaluate((el) => {
 });
 console.log('controls dialog on freshfeed card:', JSON.stringify(dlg));
 await page.screenshot({ path: out + 'freshfeed-controls.png' });
-await page.keyboard.press('Escape');
+await ff.screenshot({ path: out + 'freshfeed-controls-card.png' });
+await ff.locator('[data-close]').click();
 await page.waitForTimeout(800);
-console.log('dialogs after Escape:', await ff.evaluate((el) => el.shadowRoot.querySelectorAll('ha-dialog, .overlay').length));
+console.log('dialogs after close:', await ff.evaluate((el) => el.shadowRoot.querySelectorAll('ha-dialog, .overlay').length));
 
 // Demo feed on the FreshFeed card: one tap must not call, two taps must.
 const status = () => page.evaluate(() => document.querySelector('home-assistant').hass.states['input_select.freshfeed_demo_status'].state);
