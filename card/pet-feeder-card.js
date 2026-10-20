@@ -200,3 +200,245 @@ export function relativeTime(date, now = new Date()) {
   else text = plural(Math.round(secs / 86400), 'day');
   return diff < 0 ? `${text} ago` : `in ${text}`;
 }
+
+/** Gauge bar colour: green >= 50, amber 20-49, red < 20, neutral when unknown. */
+export function gaugeColor(pct) {
+  if (pct == null) return 'var(--disabled-color, #bdbdbd)';
+  if (pct >= 50) return 'var(--success-color, #43a047)';
+  if (pct >= 20) return 'var(--warning-color, #ffa600)';
+  return 'var(--error-color, #db4437)';
+}
+
+/**
+ * FreshFeed LED strip colour. These are product colours (the physical LED), not
+ * theme colours, so they are fixed hex values.
+ */
+export function ledColor(statusKey, foodPct) {
+  if (statusKey === 'offline') return '#6b7280';
+  if (statusKey === 'fault' || statusKey === 'empty' || foodPct === 0) return '#ef4444';
+  if (foodPct != null && foodPct < 50) return '#f59e0b';
+  return '#3b82f6';
+}
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+export const MODELS = {
+  freshfeed: { name: 'FreshFeed', color: 'black' },
+  aqara_c1: { name: 'Aqara C1', color: 'white' },
+};
+
+export const ENTITY_KEYS = [
+  'status',
+  'food_level',
+  'error',
+  'last_feed',
+  'last_fed',
+  'portions_today',
+  'weight_today',
+  'counter',
+  'schedule',
+  'next_meal',
+  'temperature',
+  'camera',
+];
+
+// Keys that make sense as a chip or footer item (a displayable value).
+const VALUE_KEYS = ['last_feed', 'last_fed', 'portions_today', 'weight_today', 'counter', 'next_meal', 'temperature', 'food_level'];
+
+/** Validate a card config and fill defaults. Throws Error with a readable message. */
+export function validateConfig(config) {
+  if (!config || !config.model) {
+    throw new Error("pet-feeder-card: 'model' is required (freshfeed or aqara_c1)");
+  }
+  const model = MODELS[config.model];
+  if (!model) {
+    throw new Error(`pet-feeder-card: unknown model '${config.model}'; supported: ${Object.keys(MODELS).join(', ')}`);
+  }
+  const c = {
+    name: model.name,
+    color: model.color,
+    food_label: 'Food',
+    art_level: 'hopper',
+    chip: 'last_feed',
+    footer: ['last_fed', 'portions_today', 'next_meal'],
+    ...config,
+  };
+  if (!['black', 'white'].includes(c.color)) {
+    throw new Error(`pet-feeder-card: color must be black or white, got '${c.color}'`);
+  }
+  if (!['hopper', 'bowl'].includes(c.art_level)) {
+    throw new Error(`pet-feeder-card: art_level must be hopper or bowl, got '${c.art_level}'`);
+  }
+  if (c.entities != null && (typeof c.entities !== 'object' || Array.isArray(c.entities))) {
+    throw new Error('pet-feeder-card: entities must be a mapping of key -> entity_id');
+  }
+  c.entities = { ...(c.entities || {}) };
+  for (const k of Object.keys(c.entities)) {
+    if (!ENTITY_KEYS.includes(k)) throw new Error(`pet-feeder-card: unknown entities key '${k}'`);
+  }
+  if (c.chip != null && c.chip !== false && !VALUE_KEYS.includes(c.chip)) {
+    throw new Error(`pet-feeder-card: chip '${c.chip}' is not a displayable entity key`);
+  }
+  if (!Array.isArray(c.footer)) throw new Error('pet-feeder-card: footer must be a list of entity keys');
+  if (c.footer.length > 3) throw new Error('pet-feeder-card: footer takes at most 3 items');
+  for (const k of c.footer) {
+    if (!VALUE_KEYS.includes(k)) throw new Error(`pet-feeder-card: footer key '${k}' is not a displayable entity key`);
+  }
+  const actions = c.actions == null ? [] : c.actions;
+  if (!Array.isArray(actions)) throw new Error('pet-feeder-card: actions must be a list');
+  if (actions.length > 3) throw new Error('pet-feeder-card: actions takes at most 3 buttons');
+  c.actions = actions.map((a, i) => {
+    if (!a || typeof a.action !== 'string' || !/^[a-z0-9_]+\.[a-z0-9_]+$/.test(a.action)) {
+      throw new Error(`pet-feeder-card: actions[${i}].action must be 'domain.service'`);
+    }
+    return { icon: 'mdi:gesture-tap-button', name: a.action, ...a, confirm: a.confirm !== false };
+  });
+  const controls = c.controls == null ? [] : c.controls;
+  if (!Array.isArray(controls)) throw new Error('pet-feeder-card: controls must be a list of entity ids');
+  c.controls = [...controls];
+  return c;
+}
+
+// ---------------------------------------------------------------------------
+// View model: config + hass -> everything the renderer needs. Pure, tested.
+// ---------------------------------------------------------------------------
+
+const ITEM_ICONS = {
+  last_feed: 'mdi:bowl-mix-outline',
+  last_fed: 'mdi:history',
+  portions_today: 'mdi:food-drumstick-outline',
+  weight_today: 'mdi:scale',
+  counter: 'mdi:counter',
+  next_meal: 'mdi:calendar-clock',
+  temperature: 'mdi:thermometer',
+  food_level: 'mdi:food-variant',
+};
+
+const UNAVAILABLE = new Set(['unavailable', 'unknown', '']);
+
+/** "3.0" -> "3", "2.50" -> "2.5"; non-numeric strings are returned as-is. */
+function formatNumber(raw) {
+  const n = Number(raw);
+  if (raw === '' || raw == null || !Number.isFinite(n)) return String(raw);
+  return String(Math.round(n * 100) / 100);
+}
+
+function pluralUnit(n, unit) {
+  return `${formatNumber(n)} ${unit}${Number(n) === 1 ? '' : 's'}`;
+}
+
+/** Format a value-type entity for the chip/footer. */
+function formatValue(key, stateObj) {
+  const raw = stateObj.state;
+  if (raw == null || UNAVAILABLE.has(String(raw).toLowerCase())) return 'Unknown';
+  const unit = stateObj.attributes?.unit_of_measurement;
+  const numeric = Number.isFinite(Number(raw));
+  if (numeric && (key === 'last_feed' || key === 'portions_today') && (!unit || /^portions?$/i.test(unit))) {
+    return pluralUnit(raw, 'portion');
+  }
+  if (numeric && key === 'counter' && (!unit || /^meals?$/i.test(unit))) return pluralUnit(raw, 'meal');
+  if (key === 'food_level') return normalizeFoodLevel(raw).label;
+  const v = numeric ? formatNumber(raw) : titleCase(raw);
+  return unit ? `${v} ${unit}` : v;
+}
+
+/**
+ * Parse an HA datetime-like state into a Date, or null:
+ * ISO timestamps (sensor device_class timestamp), input_datetime "YYYY-MM-DD HH:MM:SS"
+ * (local time), and time-only "HH:MM[:SS]" (next occurrence after now).
+ */
+export function parseStateDate(state, now = new Date()) {
+  if (state == null) return null;
+  const s = String(state).trim();
+  const t = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (t) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +t[1], +t[2], +(t[3] || 0));
+    if (d <= now) d.setDate(d.getDate() + 1);
+    return d;
+  }
+  // Date-like strings only; a bare number such as "2.0" must not become year 2000.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return null;
+  // "YYYY-MM-DD HH:MM:SS" without zone is local time; the "T" form parses as local too.
+  return toDate(s.replace(' ', 'T'));
+}
+
+/**
+ * Build the render model. `hass` may be undefined (config set first) and any
+ * configured entity may be missing from hass.states; neither throws.
+ */
+export function buildModel(config, hass, now = new Date()) {
+  const states = (hass && hass.states) || {};
+  const ent = config.entities || {};
+  const get = (key) => (ent[key] ? states[ent[key]] : undefined);
+
+  // --- status ---------------------------------------------------------------
+  const statusObj = get('status');
+  const errorObj = get('error');
+  // The "primary" entity decides availability: the status entity, else the error entity.
+  const primaryKey = ent.status ? 'status' : ent.error ? 'error' : null;
+  const primaryObj = primaryKey ? get(primaryKey) : undefined;
+  let status;
+  if (primaryKey && !primaryObj) {
+    // Configured but not present in hass.states (typo, removed integration).
+    status = { key: 'offline', label: 'Unknown', icon: 'mdi:help-circle-outline', color: 'var(--disabled-color)' };
+  } else {
+    status = normalizeStatus({
+      status: statusObj?.state,
+      error: errorObj?.state,
+      available: primaryObj ? primaryObj.state !== 'unavailable' : undefined,
+    });
+  }
+  status.entity = primaryKey ? ent[primaryKey] : null;
+
+  // --- food gauge -------------------------------------------------------------
+  let food = null;
+  if (ent.food_level) {
+    const lvl = normalizeFoodLevel(get('food_level')?.state);
+    food = { label: config.food_label, pct: lvl.pct, text: lvl.label, color: gaugeColor(lvl.pct), entity: ent.food_level };
+  }
+
+  // --- value items (chip + footer) ------------------------------------------------
+  const item = (key) => {
+    const entityKey = key === 'next_meal' && !ent.next_meal && ent.schedule ? 'schedule' : key;
+    const entity = ent[entityKey];
+    if (!entity) return null; // not configured -> hidden
+    const so = states[entity];
+    const base = { key, icon: ITEM_ICONS[key], entity };
+    if (!so || UNAVAILABLE.has(String(so.state).toLowerCase())) return { ...base, value: 'Unknown' };
+    let value;
+    if (key === 'last_fed') {
+      // A timestamp state wins; otherwise the moment the entity last changed.
+      const d = parseStateDate(so.state, now) || toDate(so.last_changed);
+      value = d ? relativeTime(d, now) : 'Unknown';
+    } else if (key === 'next_meal') {
+      let d = null;
+      if (entityKey === 'schedule') d = nextMeal(parseAqaraSchedule(so.state), now)?.at ?? null;
+      else d = parseStateDate(so.state, now) || toDate(so.attributes?.timestamp && so.attributes.timestamp * 1000);
+      value = d ? relativeTime(d, now) : 'None scheduled';
+    } else {
+      value = formatValue(key, so);
+    }
+    return { ...base, value };
+  };
+
+  const chip = config.chip ? item(config.chip) : null;
+  const footer = (config.footer || []).map(item).filter(Boolean);
+
+  return {
+    name: config.name,
+    status,
+    food,
+    chip,
+    footer,
+    camera: ent.camera || null,
+    art: {
+      model: config.model,
+      color: config.color,
+      artLevel: config.art_level,
+      statusKey: status.key,
+      foodPct: food ? food.pct : null,
+    },
+  };
+}
