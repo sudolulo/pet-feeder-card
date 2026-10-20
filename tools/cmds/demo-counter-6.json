@@ -1,0 +1,1 @@
+[{"type":"input_number/update","input_number_id":"freshfeed_demo_counter","name":"FreshFeed Demo Counter","icon":"mdi:counter","min":0,"max":6,"step":1,"mode":"slider","unit_of_measurement":"meals"},{"type":"call_service","domain":"input_number","service":"set_value","target":{"entity_id":"input_number.freshfeed_demo_counter"},"service_data":{"value":2}}]
