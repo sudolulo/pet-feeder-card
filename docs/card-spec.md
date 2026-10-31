@@ -56,6 +56,7 @@ shadow ellipse). State-driven visuals:
 ```yaml
 type: custom:pet-feeder-card
 model: freshfeed            # freshfeed | aqara_c1 (required)
+mode: standard              # optional: standard (default) | raw
 name: FreshFeed             # optional, default from model
 color: black                # optional artwork colour: black | white
 food_label: Food            # optional gauge label
@@ -67,7 +68,7 @@ entities:                   # every key optional; card renders what is configure
   food_level: sensor.x      # enum string or numeric 0-100
   error: binary_sensor.x    # 'on' = fault
   last_feed: sensor.x       # numeric portions of the last feed (chip)
-  last_fed: sensor.x        # timestamp state; if state is not a timestamp, use last_changed
+  last_fed: sensor.x        # timestamp state (FreshFeed requires a valid timestamp; Aqara falls back to last_changed)
   portions_today: sensor.x
   weight_today: sensor.x
   counter: sensor.x         # meals delivered since the last refill (drives the meal tray)
@@ -88,6 +89,38 @@ actions:                    # round buttons along the top, in order; max 3
 controls:                   # entity ids listed in the controls dialog (menu button)
   - select.x
 ```
+
+### Raw observations
+
+The default is `mode: standard`; `raw_entities` is accepted only with `mode: raw`.
+
+Use `mode: raw` to show selected Home Assistant states as read-only observations, without
+semantic entity mappings, actions, or controls. Raw mode is supported only for the FreshFeed;
+`raw_entities` is required and must contain 1-32 unique valid `sensor.*` or
+`binary_sensor.*` entity ID strings. Do not configure non-empty `entities`, `actions`, or
+`controls` in raw mode (empty or omitted values are allowed). For example:
+
+```yaml
+type: custom:pet-feeder-card
+model: freshfeed
+mode: raw
+raw_entities:
+  - sensor.example_dp_4
+  - binary_sensor.example_dp_110
+```
+
+Raw observations display each entity's Home Assistant display name (falling back to its
+entity ID) and literal state. Missing, unknown, and unavailable states remain distinct. The availability badge means only that the selected Home Assistant
+states are present and available; it does not indicate freshness, device health, or feed status.
+The card makes no claim about whether a selected entity is locally or cloud sourced; the
+operator must select verified local bindings when local provenance matters. Selecting a row
+opens its read-only Home Assistant entity information.
+A collapsible Device data panel shows the selected observations without decoding datapoints.
+Raw mode keeps the FreshFeed artwork and original project six-slot logo, not a manufacturer
+logo, and does not reference official SVG assets. It does not show calendars, food gauges,
+temperature, meal counts, camera or actions from raw datapoints. `color` and `art_level` are
+still validated in raw mode; `chip` is normalized to `false`, `footer` to `[]`, and
+`meal_slots` to `null`.
 
 `confirm: true` means the first tap turns the button into an armed state (filled
 `--warning-color`, icon `mdi:check`, tooltip "Tap again to confirm") for 4 seconds; a second

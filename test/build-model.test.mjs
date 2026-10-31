@@ -32,12 +32,83 @@ const ffHass = (over = {}) => ({
 test('works with no hass at all and no entities', () => {
   const m = buildModel(validateConfig({ model: 'freshfeed' }), undefined, now);
   assert.equal(m.name, 'FreshFeed');
-  assert.equal(m.status.key, 'ready');
+  assert.equal(m.status.key, 'unknown');
   assert.equal(m.food, null);
   assert.equal(m.chip, null);
   assert.deepEqual(m.footer, []);
   assert.equal(m.camera, null);
-  assert.deepEqual(m.art, { model: 'freshfeed', color: 'black', artLevel: 'hopper', statusKey: 'ready', foodPct: null });
+  assert.deepEqual(m.art, { model: 'freshfeed', color: 'black', artLevel: 'hopper', statusKey: 'unknown', foodPct: null });
+});
+
+test('raw mode preserves literal states and reports availability without feeder semantics', () => {
+  const cfg = validateConfig({
+    model: 'freshfeed',
+    mode: 'raw',
+    raw_entities: ['sensor.example_dp_4', 'binary_sensor.example_dp_110', 'sensor.example_dp_5'],
+  });
+  const m = buildModel(cfg, {
+    states: {
+      'sensor.example_dp_4': st('feeding', { friendly_name: 'Raw DP 4' }),
+      'binary_sensor.example_dp_110': st('on', { friendly_name: 'Door state' }),
+      'sensor.example_dp_5': st('unavailable'),
+    },
+  }, now);
+  assert.equal(m.mode, 'raw');
+  assert.deepEqual(m.availability, { label: 'Partial data', available: 2, total: 3 });
+  assert.deepEqual(
+    m.rawRows.map((r) => [r.name, r.state, r.kind]),
+    [['Raw DP 4', 'feeding', 'available'], ['Door state', 'on', 'available'], ['sensor.example_dp_5', 'unavailable', 'unavailable']],
+  );
+  assert.equal(m.food, null);
+  assert.equal(m.meals, null);
+  assert.equal(m.chip, null);
+  assert.deepEqual(m.footer, []);
+  assert.equal(m.camera, null);
+  assert.equal(m.art.foodPct, null);
+});
+
+test('raw mode treats whitespace-padded unknown and unavailable sentinels as unavailable data', () => {
+  const raw_entities = ['sensor.padded_unknown', 'sensor.padded_unavailable', 'sensor.available'];
+  const cfg = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities });
+  const m = buildModel(cfg, { states: {
+    'sensor.padded_unknown': st(' unknown '),
+    'sensor.padded_unavailable': st(' UnAvAiLaBlE '),
+    'sensor.available': st('reported'),
+  } }, now);
+
+  assert.deepEqual(m.availability, { label: 'Partial data', available: 1, total: 3 });
+  assert.deepEqual(m.rawRows.map((row) => row.state), [' unknown ', ' UnAvAiLaBlE ', 'reported']);
+  assert.deepEqual(m.rawRows.map((row) => row.kind), ['unknown', 'unavailable', 'available']);
+});
+
+test('raw mode exposes no unverified local-provenance claim in its model', () => {
+  const cfg = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.cloud_backed'] });
+  const m = buildModel(cfg, { states: { 'sensor.cloud_backed': st('reported') } }, now);
+
+  assert.equal(m.status.label, 'Read-only');
+  assert.equal(m.status.provenance, undefined);
+});
+
+test('raw mode labels an all-available literal fixture as Data available', () => {
+  const raw_entities = Array.from({ length: 10 }, (_, index) => `sensor.fixture_dp_${index + 1}`);
+  const cfg = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities });
+  const m = buildModel(cfg, { states: Object.fromEntries(raw_entities.map((entity) => [entity, st('reported')])) }, now);
+
+  assert.deepEqual(m.availability, { label: 'Data available', available: 10, total: 10 });
+});
+
+test('raw mode distinguishes unknown, unavailable, and missing values', () => {
+  const cfg = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.known', 'sensor.unknown', 'binary_sensor.missing'] });
+  const m = buildModel(cfg, { states: { 'sensor.known': st('unknown'), 'sensor.unknown': st('unavailable') } }, now);
+  assert.equal(m.availability.label, 'Data unavailable');
+  assert.deepEqual(m.rawRows.map((r) => [r.state, r.kind]), [['unknown', 'unknown'], ['unavailable', 'unavailable'], ['Missing', 'missing']]);
+});
+
+test('raw mode treats a malformed state object as missing literal data', () => {
+  const cfg = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.malformed'] });
+  const m = buildModel(cfg, { states: { 'sensor.malformed': { attributes: { friendly_name: 'Malformed DP' } } } }, now);
+  assert.deepEqual(m.availability, { label: 'Data unavailable', available: 0, total: 1 });
+  assert.deepEqual(m.rawRows, [{ entity: 'sensor.malformed', name: 'Malformed DP', state: 'Missing', kind: 'missing' }]);
 });
 
 test('FreshFeed ready/high scenario', () => {
@@ -57,7 +128,7 @@ test('FreshFeed ready/high scenario', () => {
   assert.deepEqual(
     m.footer.map((f) => [f.key, f.value]),
     [
-      ['last_fed', '51 minutes ago'],
+      ['last_fed', 'Unknown'],
       ['counter', '4 meals'],
       ['next_meal', 'in 6 hours'],
     ],
@@ -77,7 +148,7 @@ test('configured but missing entities render Unknown, never throw', () => {
   const cfg = validateConfig({ model: 'freshfeed', entities: FF_ENTITIES });
   const m = buildModel(cfg, { states: {} }, now);
   assert.equal(m.status.label, 'Unknown');
-  assert.equal(m.status.key, 'offline');
+  assert.equal(m.status.key, 'unknown');
   assert.equal(m.food.pct, null);
   assert.equal(m.food.text, 'Unknown');
   assert.equal(m.chip.value, 'Unknown');
@@ -91,6 +162,102 @@ test('last_fed uses a timestamp state when it is one', () => {
   const cfg = validateConfig({ model: 'freshfeed', entities: { last_fed: 'sensor.last' }, footer: ['last_fed'] });
   const m = buildModel(cfg, { states: { 'sensor.last': st(iso(minsAgo(120)), { device_class: 'timestamp' }) } }, now);
   assert.equal(m.footer[0].value, '2 hours ago');
+});
+
+test('FreshFeed unknown, blank, and missing semantic statuses do not imply readiness', () => {
+  const cfg = validateConfig({ model: 'freshfeed', entities: { status: 'sensor.status' } });
+  for (const states of [{ 'sensor.status': st('mystery_code') }, { 'sensor.status': st('  ') }, {}]) {
+    const m = buildModel(cfg, { states }, now);
+    assert.deepEqual([m.status.key, m.status.label, m.status.icon, m.status.color, m.art.statusKey],
+      ['unknown', 'Unknown', 'mdi:help-circle-outline', 'var(--disabled-color)', 'unknown']);
+  }
+  const errorOnly = validateConfig({ model: 'freshfeed', entities: { error: 'binary_sensor.error' } });
+  assert.equal(buildModel(errorOnly, { states: { 'binary_sensor.error': st('off') } }, now).status.key, 'unknown');
+});
+
+test('FreshFeed known status aliases and availability and fault precedence remain intact', () => {
+  const cfg = validateConfig({ model: 'freshfeed', entities: { status: 'sensor.status', error: 'binary_sensor.error' } });
+  for (const [state, error, expected] of [
+    ['standby', 'off', 'ready'], ['feeding', 'off', 'feeding'], ['feeding_complete', 'off', 'done'],
+    ['unavailable', 'on', 'offline'], ['unknown', 'on', 'offline'], ['mystery_code', 'on', 'fault'],
+  ]) {
+    assert.equal(buildModel(cfg, { states: { 'sensor.status': st(state), 'binary_sensor.error': st(error) } }, now).status.key, expected);
+  }
+});
+
+for (const state of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+  test(`FreshFeed treats inherited status name ${state} as unknown`, () => {
+    const cfg = validateConfig({ model: 'freshfeed', entities: { status: 'sensor.status' } });
+    const m = buildModel(cfg, { states: { 'sensor.status': st(state) } }, now);
+    assert.deepEqual(m.status, {
+      key: 'unknown', label: 'Unknown', icon: 'mdi:help-circle-outline',
+      color: 'var(--disabled-color)', entity: 'sensor.status',
+    });
+    assert.equal(m.art.statusKey, 'unknown');
+  });
+}
+
+test('FreshFeed preserves fault and offline precedence with inherited status names', () => {
+  const cfg = validateConfig({ model: 'freshfeed', entities: { status: 'sensor.status', error: 'binary_sensor.error' } });
+  for (const [state, error, expected] of [
+    ['constructor', 'on', 'fault'], ['__proto__', 'on', 'fault'],
+    ['unavailable', 'on', 'offline'], ['unknown', 'on', 'offline'],
+  ]) {
+    assert.equal(buildModel(cfg, { states: { 'sensor.status': st(state), 'binary_sensor.error': st(error) } }, now).status.key, expected);
+  }
+});
+
+test('FreshFeed last_fed does not infer a meal from a non-timestamp state change', () => {
+  const cfg = validateConfig({ model: 'freshfeed', entities: { last_fed: 'sensor.last' }, footer: ['last_fed'] });
+  for (const state of ['2.0', 'not a date']) {
+    assert.equal(buildModel(cfg, { states: { 'sensor.last': st(state, {}, iso(minsAgo(51))) } }, now).footer[0].value, 'Unknown');
+  }
+});
+
+const lastFedValue = (state, at = now) => {
+  const cfg = validateConfig({ model: 'freshfeed', entities: { last_fed: 'sensor.last' }, footer: ['last_fed'] });
+  return buildModel(cfg, { states: { 'sensor.last': st(state) } }, at).footer[0].value;
+};
+
+for (const state of [
+  '07:00:00', '2026-10-20', '2026-10-20T10:00:00', '2026-10-20 10:00:00',
+  '2026-10-20T12:00:00.001Z', '2026-02-30T10:00:00Z', '2025-02-29T10:00:00Z',
+  '2026-10-19T24:00:00Z', '2026-10-19T10:60:00Z', '2026-10-19T10:00:60Z',
+  '2026-10-19T10:00:00+14:01', '2026-10-19T10:00:00+01:60',
+  '2026-10-19T10:00:00-00:00', '2026-10-19t10:00:00z',
+  '2026-10-19T10:00:00.1234567890Z', '2.0', 'unknown', 'unavailable', '',
+  new Date('2026-10-19T10:00:00Z'), 123, null,
+]) {
+  test(`FreshFeed rejects last_fed ${String(state)}`, () => {
+    assert.equal(lastFedValue(state, new Date('2026-10-20T12:00:00Z')), 'Unknown');
+  });
+}
+
+test('FreshFeed accepts valid zoned past and equal timestamps', () => {
+  const at = new Date('2026-03-01T00:00:00Z');
+  for (const [state, expected] of [
+    ['2026-02-28T22:00:00Z', '2 hours ago'],
+    ['2026-02-28T22:00:00+00:00', '2 hours ago'],
+    ['2026-03-01T01:00:00+03:00', '2 hours ago'],
+    ['2024-02-29T00:00:00Z', '731 days ago'],
+    ['2026-02-28T23:59:59.1Z', 'just now'],
+    ['2026-02-28T23:59:59.123456789Z', 'just now'],
+    ['2026-03-01T00:00:00Z', 'just now'],
+    [' 2026-02-28T22:00:00Z ', '2 hours ago'],
+    ['0099-01-01T00:00:00Z', '703881 days ago'],
+  ]) assert.equal(lastFedValue(state, at), expected, state);
+});
+
+test('FreshFeed rejects last_fed when now is invalid', () => {
+  assert.equal(lastFedValue('2026-01-01T00:00:00Z', new Date(NaN)), 'Unknown');
+});
+
+test('Aqara retains unknown status normalization and last_changed fallback', () => {
+  const cfg = validateConfig({ model: 'aqara_c1', entities: { status: 'sensor.status', last_fed: 'sensor.last' }, footer: ['last_fed'] });
+  const m = buildModel(cfg, { states: { 'sensor.status': st('mystery_code'), 'sensor.last': st('2.0', {}, iso(minsAgo(51))) } }, now);
+  assert.equal(m.status.key, 'ready');
+  assert.equal(m.status.label, 'Mystery Code');
+  assert.equal(m.footer[0].value, '51 minutes ago');
 });
 
 const AQ = {

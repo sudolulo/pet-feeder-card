@@ -215,6 +215,48 @@ try {
     out.trayUnknownText = text(tray, '.meals .gauge-text');
     out.trayUnknownGlyphs = tiles().map((t) => t.textContent.trim());
 
+    // Raw mode is a literal, read-only view: it can open more-info but must never
+    // offer controls or call a service, even when synthetic stale events invoke internals.
+    const raw = document.createElement('pet-feeder-card');
+    raw.setConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.example_dp_4', 'binary_sensor.example_dp_110', 'sensor.missing'] });
+    raw.hass = makeHass({
+      'sensor.example_dp_4': { state: '<script>alert(1)</script>', attributes: { friendly_name: '<img src=x>' } },
+      'binary_sensor.example_dp_110': { state: 'off', attributes: { friendly_name: 'Door state' } },
+    });
+    host.appendChild(raw);
+    out.rawHeader = text(raw, '.raw-brand-name');
+    out.rawContext = text(raw, '.raw-context');
+    const rawLogo = raw.shadowRoot.querySelector('svg.raw-logo');
+    out.rawLogo = rawLogo?.getAttribute('role') === 'img' && rawLogo?.getAttribute('aria-label') === 'Pet feeder card';
+    out.rawLogoIsSelfContained = rawLogo != null && ![...rawLogo.querySelectorAll('*')].some((el) => [...el.attributes].some((attr) => /^(href|src)$/i.test(attr.name) || /url\(/i.test(attr.value)));
+    out.rawAvailability = text(raw, '.availability');
+    out.rawRows = [...raw.shadowRoot.querySelectorAll('.raw-row')].map((row) => row.textContent.trim());
+    out.rawContextHasNoLocalClaim = !/\bLOCAL\b/i.test(out.rawContext);
+    out.rawNoControls = !raw.shadowRoot.querySelector('.actions, .menu, .camera, .chip, .gauges, .footer');
+    const rawBefore = raw.shadowRoot.querySelector('.header');
+    const rawDetails = raw.shadowRoot.querySelector('.raw-data');
+    rawDetails.open = true;
+    raw.shadowRoot.querySelector('.raw-row').focus();
+    raw.hass = makeHass({ ...raw.hass.states, 'sensor.example_dp_4': { state: 'updated', attributes: { friendly_name: 'Raw DP 4' } } });
+    out.rawWatchedUpdate = text(raw, '.raw-row-state');
+    out.rawExpanded = raw.shadowRoot.querySelector('.raw-data').open;
+    out.rawFocusRetained = raw.shadowRoot.activeElement?.dataset?.more === 'sensor.example_dp_4';
+    raw.shadowRoot.querySelector('.raw-data summary').focus();
+    raw.hass = makeHass({ ...raw.hass.states, 'sensor.example_dp_4': { state: 'focused-summary-update', attributes: { friendly_name: 'Raw DP 4' } } });
+    out.rawSummaryFocusRetained = raw.shadowRoot.activeElement === raw.shadowRoot.querySelector('.raw-data summary');
+    window.__calls.length = 0;
+    raw._onAction(0);
+    await raw._openControls();
+    out.rawNoServiceCalls = window.__calls.length === 0 && !raw.shadowRoot.querySelector('.overlay');
+    let rawMore = null;
+    raw.addEventListener('hass-more-info', (ev) => (rawMore = ev.detail.entityId));
+    raw.shadowRoot.querySelector('.raw-row').click();
+    out.rawMoreInfo = rawMore;
+    raw.setConfig(structuredClone(ffConfig));
+    raw.hass = makeHass(ffStates({ status: 'standby', food: 'high' }));
+    out.rawClassRemovedOnStandard = !raw._root.classList.contains('raw-card');
+    out.standardAfterRawHasControls = Boolean(raw.shadowRoot.querySelector('.actions, .menu, .gauges, .footer'));
+
     // stub config renders
     const e = document.createElement('pet-feeder-card');
     e.setConfig(customElements.get('pet-feeder-card').getStubConfig());
@@ -271,6 +313,16 @@ try {
     JSON.stringify(r.trayUnknownStates) === JSON.stringify(Array(6).fill('unknown')) && r.trayUnknownText === 'Unknown' && r.trayUnknownGlyphs.every((g) => g === '?'),
     `unavailable counter -> all tiles unknown "?" and "Unknown" (got ${JSON.stringify(r.trayUnknownStates)}, ${r.trayUnknownText}, ${JSON.stringify(r.trayUnknownGlyphs)})`,
   );
+  check(r.rawHeader === 'PetSafe' && r.rawContext === 'READ ONLY' && r.rawContextHasNoLocalClaim, `raw header identifies PetSafe read-only context without claiming data provenance (got ${r.rawHeader} / ${r.rawContext})`);
+  check(r.rawLogo && r.rawLogoIsSelfContained, 'raw header has an accessible self-contained original card mark with no external resources');
+  check(r.rawAvailability === 'Partial data2/3', `raw availability is availability-only (got ${r.rawAvailability})`);
+  check(r.rawRows[0] === '<img src=x><script>alert(1)</script>' && r.rawRows[2] === 'sensor.missingMissing', `raw names and states render as literal escaped text (got ${JSON.stringify(r.rawRows)})`);
+  check(r.rawNoControls, 'raw mode has no actions, controls, camera, food, tray, or footer');
+  check(r.rawWatchedUpdate === 'updated' && r.rawExpanded && r.rawFocusRetained, `raw watched state update preserves expanded panel and focus (state ${r.rawWatchedUpdate}, expanded ${r.rawExpanded}, focus ${r.rawFocusRetained})`);
+  check(r.rawSummaryFocusRetained, 'raw watched state update preserves Device data summary keyboard focus');
+  check(r.rawNoServiceCalls, 'raw synthetic action/menu calls fail closed without service invocation');
+  check(r.rawMoreInfo === 'sensor.example_dp_4', `raw rows open read-only more-info (got ${r.rawMoreInfo})`);
+  check(r.rawClassRemovedOnStandard && r.standardAfterRawHasControls, 'switching the same card from raw to standard removes raw styling and restores standard controls');
   check(r.stub === 'FreshFeed' && r.size === 7, `stub config renders (got ${r.stub}, size ${r.size})`);
   check(r.grid === '{"columns":12,"min_columns":6,"rows":"auto"}', `grid options (got ${r.grid})`);
   check(r.customCards.includes('"type":"pet-feeder-card"'), 'registered in window.customCards');
@@ -338,6 +390,53 @@ try {
   await page.locator('.cell[data-shot="aqara-bowl-full-dark"]').screenshot({ path: armed });
   written.push(armed);
 
+  await page.evaluate(() => {
+    const { makeHass } = window.__harness;
+    const fixtureIds = [4, 14, 110, 111, 125, 130, 131, 142, 145, 150].map((id) => `sensor.fixture_dp_${id}`);
+    const fixtureStates = Object.fromEntries(fixtureIds.map((id, index) => [id, {
+      state: 'reported', attributes: { friendly_name: `Device datapoint ${index + 1}` },
+    }]));
+    for (const theme of ['light', 'dark']) {
+      for (const expanded of [false, true]) {
+        const cell = document.createElement('div');
+        cell.className = `cell theme-${theme}`;
+        cell.dataset.shot = `freshfeed-raw-showcase-${theme}-${expanded ? 'expanded' : 'collapsed'}`;
+        const card = document.createElement('pet-feeder-card');
+        card.setConfig({ model: 'freshfeed', mode: 'raw', raw_entities: fixtureIds });
+        card.hass = makeHass(fixtureStates);
+        cell.appendChild(card);
+        card.shadowRoot.querySelector('.raw-data').open = expanded;
+        document.getElementById('grid').appendChild(cell);
+      }
+
+      // Keep the unavailable, missing, and long literal edge cases visually covered.
+      const edge = document.createElement('div');
+      edge.className = `cell theme-${theme}`;
+      edge.dataset.shot = `freshfeed-raw-edge-${theme}`;
+      const edgeCard = document.createElement('pet-feeder-card');
+      edgeCard.setConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.example_dp_4', 'binary_sensor.example_dp_110', 'sensor.unavailable', 'sensor.missing', 'sensor.long'] });
+      edgeCard.hass = makeHass({
+        'sensor.example_dp_4': { state: 'unknown', attributes: { friendly_name: 'Raw DP 4' } },
+        'binary_sensor.example_dp_110': { state: 'off', attributes: { friendly_name: 'Door state' } },
+        'sensor.unavailable': { state: 'unavailable', attributes: { friendly_name: 'Raw DP unavailable' } },
+        'sensor.long': { state: 'a deliberately long literal device value that must wrap without overflow', attributes: { friendly_name: 'Very long raw entity friendly name for narrow screens' } },
+      });
+      edge.appendChild(edgeCard);
+      edgeCard.shadowRoot.querySelector('.raw-data').open = true;
+      document.getElementById('grid').appendChild(edge);
+    }
+  });
+  for (const theme of ['light', 'dark']) {
+    for (const state of ['collapsed', 'expanded']) {
+      const file = path.join(OUT, `freshfeed-raw-showcase-${theme}-${state}.png`);
+      await page.locator(`.cell[data-shot="freshfeed-raw-showcase-${theme}-${state}"]`).screenshot({ path: file });
+      written.push(file);
+    }
+    const edgeFile = path.join(OUT, `freshfeed-raw-edge-${theme}.png`);
+    await page.locator(`.cell[data-shot="freshfeed-raw-edge-${theme}"]`).screenshot({ path: edgeFile });
+    written.push(edgeFile);
+  }
+
   // Narrow card (about half a sections-view column): the chip moves below the art.
   for (const scenario of ['aqara-bowl-full', 'freshfeed-ready-high']) {
     const narrow = await ctx.newPage();
@@ -370,6 +469,87 @@ try {
     written.push(file);
     await narrow.close();
   }
+
+  const rawNarrow = await ctx.newPage();
+  await rawNarrow.goto(`${BASE}?narrow=1`);
+  await rawNarrow.waitForFunction(() => window.__ready === true);
+  const rawFit = await rawNarrow.evaluate(() => {
+    const { makeHass } = window.__harness;
+    const cell = document.createElement('div');
+    cell.className = 'cell theme-light';
+    const card = document.createElement('pet-feeder-card');
+    card.setConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.long'] });
+    card.hass = makeHass({ 'sensor.long': { state: 'a deliberately long literal device value that must wrap without overflow', attributes: { friendly_name: 'Very long raw entity friendly name for narrow screens' } } });
+    cell.appendChild(card);
+    document.body.appendChild(cell);
+    const rows = [...card.shadowRoot.querySelectorAll('.raw-row, .raw-row-name, .raw-row-state')];
+    const overflow = rows.some((el) => el.scrollWidth > el.clientWidth || el.getBoundingClientRect().right > card.getBoundingClientRect().right + 1);
+    const title = card.shadowRoot.querySelector('.raw-brand .name');
+    const logo = card.shadowRoot.querySelector('.raw-logo');
+    return {
+      overflow,
+      width: Math.round(card.getBoundingClientRect().width),
+      title: title?.textContent.trim(),
+      titleClipped: title ? title.scrollWidth > title.clientWidth : true,
+      logoInside: logo ? logo.getBoundingClientRect().right <= card.getBoundingClientRect().right + 1 : false,
+    };
+  });
+  check(!rawFit.overflow && rawFit.title === 'FreshFeed' && !rawFit.titleClipped && rawFit.logoInside, `narrow raw ${rawFit.width}px card keeps the full FreshFeed title and card mark inside without overflow`);
+  const rawNarrowFile = path.join(OUT, 'extra-narrow-freshfeed-raw-light.png');
+  await rawNarrow.locator('.cell.theme-light').last().screenshot({ path: rawNarrowFile });
+  written.push(rawNarrowFile);
+  await rawNarrow.close();
+
+  // Representative all-available raw fixture at real card widths, independent of
+  // the viewport: each theme gets both collapsed and expanded Device data states.
+  const rawWidths = await ctx.newPage();
+  await rawWidths.goto(BASE);
+  await rawWidths.waitForFunction(() => window.__ready === true);
+  const rawWidthFit = await rawWidths.evaluate(() => {
+    const { makeHass } = window.__harness;
+    const ids = [4, 14, 110, 111, 125, 130, 131, 142, 145, 150].map((id) => `sensor.fixture_dp_${id}`);
+    const states = Object.fromEntries(ids.map((id, index) => [id, {
+      state: 'reported', attributes: { friendly_name: `Device datapoint ${index + 1}` },
+    }]));
+    const checks = [];
+    for (const width of [320, 400]) {
+      for (const theme of ['light', 'dark']) {
+        for (const expanded of [false, true]) {
+          const cell = document.createElement('div');
+          cell.className = `cell theme-${theme}`;
+          cell.dataset.shot = `freshfeed-raw-${width}-${theme}-${expanded ? 'expanded' : 'collapsed'}`;
+          cell.style.cssText = `width:${width + 40}px;padding:20px;box-sizing:border-box`;
+          const card = document.createElement('pet-feeder-card');
+          card.setConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ids });
+          card.hass = makeHass(states);
+          cell.appendChild(card);
+          card.shadowRoot.querySelector('.raw-data').open = expanded;
+          document.body.appendChild(cell);
+          const title = card.shadowRoot.querySelector('.raw-brand .name');
+          const names = [...card.shadowRoot.querySelectorAll('.raw-row-name')];
+          checks.push({
+            width: Math.round(card.getBoundingClientRect().width),
+            availability: card.shadowRoot.querySelector('.availability')?.textContent.trim(),
+            titleClipped: title.scrollWidth > title.clientWidth,
+            namesClipped: names.some((name) => name.scrollWidth > name.clientWidth),
+            overflow: card.scrollWidth > card.clientWidth,
+          });
+        }
+      }
+    }
+    return checks;
+  });
+  check(rawWidthFit.length === 8 && rawWidthFit.every((fit) => [320, 400].includes(fit.width) && fit.availability === 'Data available10/10' && !fit.titleClipped && !fit.namesClipped && !fit.overflow), `all-available 10/10 raw fixture has the exact Data available label and no clipped names at 320px and 400px cards (${JSON.stringify(rawWidthFit)})`);
+  for (const width of [320, 400]) {
+    for (const theme of ['light', 'dark']) {
+      for (const state of ['collapsed', 'expanded']) {
+        const file = path.join(OUT, `freshfeed-raw-${width}-${theme}-${state}.png`);
+        await rawWidths.locator(`.cell[data-shot="freshfeed-raw-${width}-${theme}-${state}"]`).screenshot({ path: file });
+        written.push(file);
+      }
+    }
+  }
+  await rawWidths.close();
 
   // prefers-reduced-motion: no animations at all on the feeding cards.
   const rmCtx = await browser.newContext({ reducedMotion: 'reduce' });

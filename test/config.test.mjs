@@ -21,6 +21,63 @@ test('freshfeed defaults', () => {
   assert.deepEqual(c.entities, {});
   assert.deepEqual(c.actions, []);
   assert.deepEqual(c.controls, []);
+  assert.equal(c.mode, 'standard');
+});
+
+test('raw mode accepts one to 32 unique read-only sensor entity ids', () => {
+  const c = validateConfig({
+    model: 'freshfeed',
+    mode: 'raw',
+    raw_entities: ['sensor.example_dp_4', 'binary_sensor.example_dp_110'],
+  });
+  assert.equal(c.mode, 'raw');
+  assert.deepEqual(c.raw_entities, ['sensor.example_dp_4', 'binary_sensor.example_dp_110']);
+  assert.deepEqual(c.entities, {});
+  assert.deepEqual(c.actions, []);
+  assert.deepEqual(c.controls, []);
+});
+
+test('raw mode accepts exactly one and exactly 32 unique entity ids without changing them', () => {
+  const one = ['sensor.dp_1'];
+  const thirtyTwo = Array.from({ length: 32 }, (_, index) => `sensor.dp_${index + 1}`);
+
+  assert.deepEqual(validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: one }).raw_entities, one);
+  assert.deepEqual(validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: thirtyTwo }).raw_entities, thirtyTwo);
+});
+
+test('raw mode rejects Aqara C1 while Aqara standard configuration remains unchanged', () => {
+  assert.throws(
+    () => validateConfig({ model: 'aqara_c1', mode: 'raw', raw_entities: ['sensor.cat_feeder_state'] }),
+    /raw mode is only supported for freshfeed/,
+  );
+
+  const standard = validateConfig({ model: 'aqara_c1', entities: { food_level: 'sensor.cat_feeder_state' } });
+  assert.equal(standard.mode, 'standard');
+  assert.equal(standard.name, 'Aqara C1');
+  assert.equal(standard.color, 'white');
+  assert.equal(standard.entities.food_level, 'sensor.cat_feeder_state');
+});
+
+test('raw mode rejects non-raw configuration and malformed raw entity lists', () => {
+  const valid = 'sensor.example_dp_4';
+  for (const bad of [undefined, [], [valid, valid], ['switch.example_dp_4'], ['sensor.Upper'], [42], Array.from({ length: 33 }, (_, i) => `sensor.dp_${i}`)]) {
+    assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: bad }), /raw_entities|unique|1 to 32|sensor/i, String(bad));
+  }
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', entities: { status: valid }, raw_entities: [valid] }), /entities.*raw/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', actions: [{ action: 'button.press' }], raw_entities: [valid] }), /actions.*raw/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', controls: ['input_boolean.x'], raw_entities: [valid] }), /controls.*raw/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', raw_entities: [valid] }), /raw_entities.*raw/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'other' }), /mode/i);
+});
+
+test('raw mode applies common presentation validation and copies raw entity ids', () => {
+  const rawEntities = ['sensor.example_dp_4'];
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: rawEntities, color: 'pink' }), /color/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: rawEntities, art_level: 'moon' }), /art_level/i);
+
+  const c = validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: rawEntities });
+  rawEntities[0] = 'sensor.changed_after_validation';
+  assert.deepEqual(c.raw_entities, ['sensor.example_dp_4']);
 });
 
 test('aqara_c1 defaults to white and hopper art level', () => {

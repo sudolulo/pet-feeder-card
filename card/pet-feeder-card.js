@@ -311,6 +311,7 @@ export function validateConfig(config) {
     throw new Error(`pet-feeder-card: unknown model '${config.model}'; supported: ${Object.keys(MODELS).join(', ')}`);
   }
   const c = {
+    mode: 'standard',
     name: model.name,
     color: model.color,
     meal_slots: model.meal_slots,
@@ -320,12 +321,42 @@ export function validateConfig(config) {
     footer: ['last_fed', 'portions_today', 'next_meal'],
     ...config,
   };
+  if (!['standard', 'raw'].includes(c.mode)) {
+    throw new Error(`pet-feeder-card: mode must be standard or raw, got '${c.mode}'`);
+  }
+  if (c.mode === 'raw' && c.model !== 'freshfeed') {
+    throw new Error('pet-feeder-card: raw mode is only supported for freshfeed');
+  }
   if (!['black', 'white'].includes(c.color)) {
     throw new Error(`pet-feeder-card: color must be black or white, got '${c.color}'`);
   }
   if (!['hopper', 'bowl'].includes(c.art_level)) {
     throw new Error(`pet-feeder-card: art_level must be hopper or bowl, got '${c.art_level}'`);
   }
+  if (c.mode === 'raw') {
+    if (config.entities != null && (typeof config.entities !== 'object' || Array.isArray(config.entities) || Object.keys(config.entities).length)) {
+      throw new Error('pet-feeder-card: entities cannot be used in raw mode');
+    }
+    if (config.actions != null && (!Array.isArray(config.actions) || config.actions.length)) throw new Error('pet-feeder-card: actions cannot be used in raw mode');
+    if (config.controls != null && (!Array.isArray(config.controls) || config.controls.length)) throw new Error('pet-feeder-card: controls cannot be used in raw mode');
+    if (!Array.isArray(c.raw_entities) || c.raw_entities.length < 1 || c.raw_entities.length > 32) {
+      throw new Error('pet-feeder-card: raw_entities must be a list of 1 to 32 sensor or binary_sensor entity ids');
+    }
+    const rawEntityPattern = /^(sensor|binary_sensor)\.[a-z0-9_]+$/;
+    if (c.raw_entities.some((id) => typeof id !== 'string' || !rawEntityPattern.test(id))) {
+      throw new Error('pet-feeder-card: raw_entities must contain sensor or binary_sensor entity ids');
+    }
+    if (new Set(c.raw_entities).size !== c.raw_entities.length) throw new Error('pet-feeder-card: raw_entities must be unique');
+    c.entities = {};
+    c.actions = [];
+    c.controls = [];
+    c.chip = false;
+    c.footer = [];
+    c.meal_slots = null;
+    c.raw_entities = [...c.raw_entities];
+    return c;
+  }
+  if (config.raw_entities != null) throw new Error('pet-feeder-card: raw_entities can only be used with mode: raw');
   if (c.meal_slots == null) {
     c.meal_slots = null;
   } else if (!Number.isInteger(c.meal_slots) || c.meal_slots < 1 || c.meal_slots > 12) {
@@ -424,12 +455,59 @@ export function parseStateDate(state, now = new Date()) {
   return toDate(s.replace(' ', 'T'));
 }
 
+// FreshFeed last_fed must identify an actual past instant, not a local or scheduled time.
+function parseFreshFeedLastFed(state, now) {
+  if (typeof state !== 'string' || state.length > 64 || !(now instanceof Date) || !Number.isFinite(now.getTime())) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(state.trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, , zone, sign, offsetHour, offsetMinute] = match;
+  const oh = Number(offsetHour || 0);
+  const om = Number(offsetMinute || 0);
+  if (+hour > 23 || +minute > 59 || +second > 59 || oh > 14 || om > 59 || (oh === 14 && om !== 0) || zone === '-00:00') return null;
+  const instant = new Date(state.trim());
+  if (!Number.isFinite(instant.getTime()) || instant.getTime() > now.getTime()) return null;
+  const offset = (oh * 60 + om) * (sign === '-' ? -1 : 1);
+  const wall = new Date(instant.getTime() + offset * 60000);
+  if (wall.getUTCFullYear() !== +year || wall.getUTCMonth() + 1 !== +month || wall.getUTCDate() !== +day ||
+      wall.getUTCHours() !== +hour || wall.getUTCMinutes() !== +minute || wall.getUTCSeconds() !== +second) return null;
+  return instant;
+}
+
 /**
  * Build the render model. `hass` may be undefined (config set first) and any
  * configured entity may be missing from hass.states; neither throws.
  */
 export function buildModel(config, hass, now = new Date()) {
   const states = (hass && hass.states) || {};
+  if (config.mode === 'raw') {
+    const rawRows = config.raw_entities.map((entity) => {
+      const stateObj = states[entity];
+      const state = typeof stateObj?.state === 'string' ? stateObj.state : undefined;
+      const normalizedState = String(state ?? '').trim().toLowerCase();
+      const kind = state === undefined ? 'missing' : normalizedState === 'unavailable' ? 'unavailable' : normalizedState === 'unknown' ? 'unknown' : 'available';
+      return {
+        entity,
+        name: stateObj?.attributes?.friendly_name || entity,
+        state: state === undefined ? 'Missing' : state,
+        kind,
+      };
+    });
+    const available = rawRows.filter((row) => row.kind === 'available').length;
+    const total = rawRows.length;
+    return {
+      mode: 'raw',
+      name: config.name,
+      availability: { label: available === total ? 'Data available' : available ? 'Partial data' : 'Data unavailable', available, total },
+      rawRows,
+      status: { key: 'raw', label: 'Read-only', icon: 'mdi:lock-outline', color: 'var(--secondary-text-color)', entity: null },
+      food: null,
+      meals: null,
+      chip: null,
+      footer: [],
+      camera: null,
+      art: { model: config.model, color: config.color, artLevel: config.art_level, statusKey: 'raw', foodPct: null },
+    };
+  }
   const ent = config.entities || {};
   const get = (key) => (ent[key] ? states[ent[key]] : undefined);
 
@@ -439,16 +517,21 @@ export function buildModel(config, hass, now = new Date()) {
   // The "primary" entity decides availability: the status entity, else the error entity.
   const primaryKey = ent.status ? 'status' : ent.error ? 'error' : null;
   const primaryObj = primaryKey ? get(primaryKey) : undefined;
+  const unknownStatus = { key: 'unknown', label: 'Unknown', icon: 'mdi:help-circle-outline', color: 'var(--disabled-color)' };
   let status;
   if (primaryKey && !primaryObj) {
     // Configured but not present in hass.states (typo, removed integration).
-    status = { key: 'offline', label: 'Unknown', icon: 'mdi:help-circle-outline', color: 'var(--disabled-color)' };
+    status = config.model === 'freshfeed' ? unknownStatus : { ...unknownStatus, key: 'offline' };
   } else {
     status = normalizeStatus({
       status: statusObj?.state,
       error: errorObj?.state,
       available: primaryObj ? primaryObj.state !== 'unavailable' : undefined,
     });
+    const rawStatus = String(statusObj?.state ?? '').trim().toLowerCase();
+    if (config.model === 'freshfeed' && !Object.hasOwn(STATUS_ALIASES, rawStatus) && status.key !== 'offline' && status.key !== 'fault') {
+      status = unknownStatus;
+    }
   }
   status.entity = primaryKey ? ent[primaryKey] : null;
 
@@ -503,8 +586,8 @@ export function buildModel(config, hass, now = new Date()) {
     if (!so || UNAVAILABLE.has(String(so.state).toLowerCase())) return { ...base, value: 'Unknown' };
     let value;
     if (key === 'last_fed') {
-      // A timestamp state wins; otherwise the moment the entity last changed.
-      const d = parseStateDate(so.state, now) || toDate(so.last_changed);
+      // FreshFeed requires a timestamp state; other models retain last_changed fallback.
+      const d = config.model === 'freshfeed' ? parseFreshFeedLastFed(so.state, now) : parseStateDate(so.state, now) || toDate(so.last_changed);
       value = d ? relativeTime(d, now) : 'Unknown';
     } else if (key === 'next_meal') {
       const d = nextMealDate(so);
@@ -922,6 +1005,9 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+// Original project mark: a six-compartment feeder tray, not manufacturer artwork.
+const RAW_LOGO = `<svg class="raw-logo" viewBox="0 0 48 48" role="img" aria-label="Pet feeder card" xmlns="http://www.w3.org/2000/svg"><rect x="3" y="3" width="42" height="42" rx="12" fill="currentColor" fill-opacity=".10"/><rect x="11" y="9" width="26" height="30" rx="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="19" cy="16" r="3" fill="currentColor"/><circle cx="29" cy="16" r="3" fill="currentColor"/><circle cx="19" cy="24" r="3" fill="currentColor"/><circle cx="29" cy="24" r="3" fill="currentColor"/><circle cx="19" cy="32" r="3" fill="currentColor"/><circle cx="29" cy="32" r="3" fill="currentColor"/></svg>`;
+
 const STYLES = `
 :host { display: block; }
 ha-card { display: block; position: relative; overflow: hidden; height: 100%; box-sizing: border-box; }
@@ -1065,6 +1151,32 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
 .panel .round { width: 40px; height: 40px; border-color: transparent; }
 .rows > * { display: block; margin: 4px 0; }
 
+/* Raw mode intentionally shows only literal Home Assistant data. */
+.raw-card .header { align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; }
+.raw-identity { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 170px; }
+.raw-logo { width: 40px; height: 40px; flex: none; color: var(--primary-color, #03a9f4); }
+.raw-brand { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.raw-brand-name { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--secondary-text-color, #727272); }
+.raw-card .raw-brand .name { overflow: visible; text-overflow: clip; white-space: nowrap; }
+.raw-context { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--secondary-text-color, #727272); background: var(--secondary-background-color, rgba(127,127,127,.12)); }
+.raw-context ha-icon { --mdc-icon-size: 14px; }
+.raw-card .body { padding: 18px 16px 10px; min-height: 0; }
+.raw-card .art { width: min(66%, 260px); }
+.raw-card .art svg { max-height: 150px; }
+.availability { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; margin: 0 16px 14px; border-radius: 10px; background: var(--secondary-background-color, rgba(127,127,127,.12)); color: var(--primary-text-color, #212121); font-size: 14px; }
+.availability strong { font-weight: 600; }
+.availability-count { color: var(--secondary-text-color, #727272); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.raw-data { border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); }
+.raw-data summary { cursor: pointer; padding: 14px 24px; font-size: 15px; font-weight: 600; color: var(--primary-text-color, #212121); }
+.raw-rows { padding: 0 16px 12px; }
+.raw-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; text-align: left; padding: 11px 8px; border: 0; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12)); background: transparent; color: var(--primary-text-color, #212121); font: inherit; cursor: pointer; }
+.raw-row:first-child { border-top: 0; }
+.raw-row-name, .raw-row-state { overflow-wrap: anywhere; word-break: break-word; }
+.raw-row-name { color: var(--secondary-text-color, #727272); }
+.raw-row-state { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.raw-row:focus-visible, .raw-data summary:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: -2px; }
+@media (max-width: 360px) { .raw-row { grid-template-columns: 1fr; gap: 4px; } .raw-row-state { text-align: left; } }
+
 /* Artwork state */
 .pf-art.is-offline { opacity: .4; filter: grayscale(1); }
 .pf-art.is-feeding .window-food { animation: pf-slide 2.4s cubic-bezier(.3,.7,.3,1) infinite; }
@@ -1166,6 +1278,7 @@ export class PetFeederCard extends Base {
   /** Entity ids whose state objects drive the render. */
   _watched() {
     const c = this._config;
+    if (c.mode === 'raw') return [...c.raw_entities];
     const ids = new Set(Object.values(c.entities || {}).filter(Boolean));
     return [...ids];
   }
@@ -1205,6 +1318,8 @@ export class PetFeederCard extends Base {
     this._remember();
     const c = this._config;
     const m = buildModel(c, this._hass, new Date());
+    if (c.mode === 'raw') return this._renderRaw(m);
+    this._root.classList.remove('raw-card');
     const icon = (name, style = '') => `<ha-icon icon="${esc(name)}"${style ? ` style="${style}"` : ''}></ha-icon>`;
     const more = (entity) => (entity ? ` data-more="${esc(entity)}" role="button" tabindex="0"` : '');
 
@@ -1282,6 +1397,28 @@ export class PetFeederCard extends Base {
     }
   }
 
+  _renderRaw(m) {
+    const expanded = this._root.querySelector('.raw-data')?.open ?? false;
+    const active = this.shadowRoot.activeElement;
+    const focusedEntity = active?.dataset?.more;
+    const focusedSummary = active?.matches?.('.raw-data summary') ?? false;
+    const icon = (name) => `<ha-icon icon="${esc(name)}"></ha-icon>`;
+    const rows = m.rawRows
+      .map((row) => `<button class="raw-row" data-more="${esc(row.entity)}" aria-label="${esc(row.name)}: ${esc(row.state)}"><span class="raw-row-name">${esc(row.name)}</span><span class="raw-row-state" data-kind="${esc(row.kind)}">${esc(row.state)}</span></button>`)
+      .join('');
+    this._root.classList.add('raw-card');
+    this._root.innerHTML = `
+      <div class="header">
+        <div class="raw-identity">${RAW_LOGO}<div class="raw-brand"><div class="raw-brand-name">PetSafe</div><div class="name">${esc(m.name)}</div></div></div>
+        <span class="raw-context">${icon('mdi:information-outline')} READ ONLY</span>
+      </div>
+      <div class="body wide"><div class="art">${renderArt(m.art)}</div></div>
+      <div class="availability"><strong>${esc(m.availability.label)}</strong><span class="availability-count">${m.availability.available}/${m.availability.total}</span></div>
+      <details class="raw-data"${expanded ? ' open' : ''}><summary>Device data</summary><div class="raw-rows">${rows}</div></details>`;
+    if (focusedSummary) this._root.querySelector('.raw-data summary')?.focus();
+    else if (focusedEntity) this._root.querySelector(`[data-more="${CSS.escape(focusedEntity)}"]`)?.focus();
+  }
+
   _onClick(ev) {
     const path = ev.composedPath ? ev.composedPath() : [ev.target];
     const el = path.find((n) => n && n.dataset && (n.dataset.more || n.dataset.action || 'menu' in n.dataset || 'close' in n.dataset));
@@ -1297,6 +1434,7 @@ export class PetFeederCard extends Base {
   }
 
   _onAction(i) {
+    if (this._config?.mode === 'raw') return;
     const a = this._config.actions[i];
     if (!a) return;
     if (a.confirm && this._armed !== i) {
@@ -1329,6 +1467,7 @@ export class PetFeederCard extends Base {
   }
 
   _openControls() {
+    if (this._config?.mode === 'raw') return Promise.resolve();
     if (this._dialog) {
       // Already open: bring it forward instead of stacking a second one.
       this._dialog.el.querySelector('[data-close]')?.focus?.();
