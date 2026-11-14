@@ -6,13 +6,15 @@
 // scenario/theme plus an overview into harness/out/. Exits non-zero on any failed
 // check or page error.
 import http from 'node:http';
-import { readFile, mkdir, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { createOutputDirectory } from './output.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'harness', 'out');
+const OUT = await createOutputDirectory(ROOT);
+console.log(`Output directory: ${OUT}`);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
 
 const server = http.createServer(async (req, res) => {
@@ -29,8 +31,6 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(err.code === 'ENOENT' ? 404 : 500).end(String(err.code));
   }
 });
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const BASE = `http://127.0.0.1:${server.address().port}/harness/index.html`;
 
 const failures = [];
 const check = (ok, what) => {
@@ -38,10 +38,14 @@ const check = (ok, what) => {
   if (!ok) failures.push(what);
 };
 
-const browser = await chromium.launch();
+let browser;
 try {
-  await rm(OUT, { recursive: true, force: true });
-  await mkdir(OUT, { recursive: true });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const BASE = `http://127.0.0.1:${server.address().port}/harness/index.html`;
+  browser = await chromium.launch();
 
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
@@ -551,6 +555,81 @@ try {
   }
   await rawWidths.close();
 
+  // Synthetic parity acceptance, using only the local mock HA dispatcher.
+  for (const width of [1280, 400, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const parity = await page.evaluate(async () => {
+      const { makeHass } = window.__harness;
+      const card = document.createElement('pet-feeder-card');
+      const host = document.createElement('div');
+      host.style.cssText = 'width:min(100%,400px);position:fixed;inset:0;z-index:10000';
+      document.body.append(host); host.append(card);
+      card.setConfig({model:'freshfeed',entities:{},freshfeed:{entry_id:'synthetic',schedule_entity:'s',write_status_entity:'w',quick_feed_entity:'q',history_entity:'h'}});
+      const meal = {weekmask:127,hour:8,minute:0,enabled:true,audible:true};
+      const states = {s:{state:'1',attributes:{entries:[meal],source_state:'last_known',revision:'r1',observed_at:'2026-11-12T08:00:00Z'}},w:{state:'idle',attributes:{}},h:{state:'1',attributes:{basis:'ha_observed',events:[{kind:'dispensed',at:'2026-11-12T08:00:00Z',source_dp:145,compartment:2}],dp151_supported:false}}};
+      card.hass = makeHass(states); await card._openControls();
+      const button = label => [...card.shadowRoot.querySelectorAll('button')].find(b=>b.textContent===label);
+      const click = async label => {button(label).click();await Promise.resolve();};
+      await click('Add meal'); await click('Sun');
+      const time = card.shadowRoot.querySelector('input[type=time]');
+      time.value='09:30';time.dispatchEvent(new Event('input'));time.focus();
+      states.s = {...states.s,attributes:{...states.s.attributes,revision:'r2'}};
+      card.hass=makeHass(states);
+      const preserved = card.shadowRoot.activeElement===time && card._dialog.freshfeed.draft.entries[0].hour===9 && button('Save').disabled;
+      const lastSeen=card.shadowRoot.textContent.includes('last seen');
+      const historyRendered=card.shadowRoot.textContent.includes('HA-observed history') && card.shadowRoot.textContent.includes('dispensed (DP145)');
+      const overlay=card._dialog.el;
+      const draft=card._dialog.freshfeed.draft;
+      const draftValues=JSON.stringify(draft);
+      window.__calls=[];
+      // Both moves happen in one task; the browser owns disconnect/reconnect callbacks.
+      host.removeChild(card); document.body.append(card); host.append(card);
+      await Promise.resolve();
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const sameOverlayAfterReconnect=card._dialog.el===overlay && card.shadowRoot.querySelector('.overlay')===overlay;
+      const uniqueOverlayAfterReconnect=card.shadowRoot.querySelectorAll('.overlay').length===1;
+      const uniqueRecoveryAfterReconnect=card.shadowRoot.querySelectorAll('[data-recover]').length===1;
+      const draftAfterReconnect=card._dialog.freshfeed.draft===draft && JSON.stringify(draft)===draftValues;
+      const focusAfterReconnect=card.shadowRoot.activeElement===time && time.value==='09:30';
+      const safeAfterReconnect=window.__calls.every(c=>c.domain==='petsafe_freshfeed');
+      await click('Cancel'); await click('Add meal');
+      const addedTime=card.shadowRoot.querySelectorAll('input[type=time]')[1];
+      addedTime.value='13:17';addedTime.dispatchEvent(new Event('input'));
+      [...card.shadowRoot.querySelectorAll('button')].filter(b=>b.textContent==='Delete')[1].click();
+      const selectedDeletion=JSON.stringify(card._dialog.freshfeed.draft.entries)===JSON.stringify([meal]);
+      window.__calls=[]; await click('Save');
+      const exact = JSON.stringify(window.__calls[0]?.data)===JSON.stringify({entry_id:'synthetic',entries:[meal],base_revision:'r2'});
+      const safe = window.__calls.every(c=>c.domain==='petsafe_freshfeed');
+      while(card._dialog.freshfeed.draft.entries.length<10) await click('Add meal');
+      const tenMealCap=button('Add meal').disabled;
+      await click('Add meal');
+      const noEleventhMeal=card._dialog.freshfeed.draft.entries.length===10;
+      const panel=card.shadowRoot.querySelector('.panel');
+      const rect=panel.getBoundingClientRect();
+      const fit=rect.left>=0 && rect.right<=innerWidth && panel.scrollWidth<=panel.clientWidth;
+      states.w={state:'pending',attributes:{}};card.hass=makeHass(states);
+      const pending=button('Save').disabled;
+      states.w={state:'uncertain',attributes:{operation_id:'op',session_id:'session',recovery_phase:'awaiting_user_confirmation',recovery_can_start:true}};card.hass=makeHass(states);
+      const recover=!button('Check and clear uncertainty').disabled;
+      const originalConfirm=window.confirm; window.confirm=()=>true;
+      await click('Check and clear uncertainty'); window.confirm=originalConfirm;
+      const recoveryCall=window.__calls.at(-1);
+      const exactRecovery=recoveryCall?.service==='recover' && JSON.stringify(recoveryCall.data)===JSON.stringify({entry_id:'synthetic',operation_id:'op',session_id:'session',confirmed:true});
+      const scrollable=panel.scrollHeight>panel.clientHeight && ['auto','scroll'].includes(getComputedStyle(panel).overflowY);
+      button('Save').scrollIntoView();
+      const saveRect=button('Save').getBoundingClientRect();
+      const reachable=saveRect.top>=0 && saveRect.bottom<=innerHeight;
+      states.w.attributes.recovery_phase='collecting';card.hass=makeHass(states);
+      const collecting=card.shadowRoot.textContent.includes('Waiting for device reports');
+      window.__parityHost=host;
+      return {preserved,lastSeen,historyRendered,sameOverlayAfterReconnect,uniqueOverlayAfterReconnect,uniqueRecoveryAfterReconnect,draftAfterReconnect,focusAfterReconnect,safeAfterReconnect,selectedDeletion,exact,safe,tenMealCap,noEleventhMeal,fit,pending,recover,exactRecovery,scrollable,reachable,collecting};
+    });
+    for (const [name, result] of Object.entries(parity)) check(result, `parity ${width}px ${name}`);
+    const file = `parity-${width}.png`;
+    await page.screenshot({path:path.join(OUT,file)});written.push(file);
+    await page.evaluate(()=>window.__parityHost.remove());
+  }
+
   // prefers-reduced-motion: no animations at all on the feeding cards.
   const rmCtx = await browser.newContext({ reducedMotion: 'reduce' });
   const rmPage = await rmCtx.newPage();
@@ -566,8 +645,11 @@ try {
   console.log(`\nwrote ${written.length} PNGs:`);
   for (const f of written) console.log(`  ${f}`);
 } finally {
-  await browser.close();
-  server.close();
+  try {
+    if (browser) await browser.close();
+  } finally {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 if (failures.length) {

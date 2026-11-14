@@ -11,6 +11,16 @@ test('unknown model throws naming the supported models', () => {
   assert.throws(() => validateConfig({ model: 'petlibro' }), /freshfeed.*aqara_c1/);
 });
 
+test('FreshFeed parity configuration is isolated from raw and Aqara modes', () => {
+  const freshfeed = { entry_id: 'entry', schedule_entity: 'sensor.schedule', write_status_entity: 'sensor.write', quick_feed_entity: 'sensor.quick', history_entity: 'sensor.history' };
+  const result = validateConfig({ model: 'freshfeed', freshfeed });
+  assert.deepEqual(result.freshfeed, freshfeed);
+  assert.notEqual(result.freshfeed, freshfeed);
+  assert.throws(() => validateConfig({ model: 'aqara_c1', freshfeed }), /freshfeed/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', mode: 'raw', raw_entities: ['sensor.x'], freshfeed }), /freshfeed/i);
+  assert.throws(() => validateConfig({ model: 'freshfeed', freshfeed: { entry_id: 'entry' } }), /freshfeed/i);
+});
+
 test('freshfeed defaults', () => {
   const c = validateConfig({ model: 'freshfeed' });
   assert.equal(c.name, 'FreshFeed');

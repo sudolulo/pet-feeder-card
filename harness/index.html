@@ -73,6 +73,7 @@ window.__calls = [];
 function makeHass(states) {
   return {
     states,
+    config: { time_zone: 'America/New_York' },
     callService(domain, service, data, target) {
       window.__calls.push({ domain, service, data, target });
       document.getElementById('log').textContent += `callService ${domain}.${service} ${JSON.stringify(data)} ${JSON.stringify(target)}\n`;
@@ -173,7 +174,25 @@ function aqStates(classification) {
   };
 }
 
+// Synthetic parity fixtures. Service completion intentionally does not fabricate reports.
+const parityConfig = {
+  ...ffConfig,
+  freshfeed: {entry_id:'synthetic-entry', schedule_entity:'sensor.demo_schedule', write_status_entity:'sensor.demo_write', quick_feed_entity:'sensor.demo_quick', history_entity:'sensor.demo_history'},
+  actions: ['feed','defrost','refilled'].map(operation => ({name:operation,action:'petsafe_freshfeed.command',data:{operation},confirm:true})),
+};
+function parityStates(phase = 'idle', overrides = {}) {
+  const uncertain = ['awaiting_user_confirmation','collecting','failed'].includes(phase);
+  return {
+    ...ffStates({status:'standby',food:'high'}),
+    'sensor.demo_schedule':st(1,{entries:[{weekmask:127,hour:8,minute:0,enabled:true,audible:true}],source_state:'last_known',observed_at:'2026-11-12T08:00:00Z',revision:'synthetic-revision',source_entity_id:'text.demo_plan',error:null}),
+    'sensor.demo_write':st(uncertain?'uncertain':'idle',{state:uncertain?'uncertain':'idle',operation_id:uncertain?'synthetic-op':null,operation:uncertain?'feed':null,session_id:'synthetic-session',reason:phase==='failed'?'awaiting_device_report':null,storage_fault:false,integrity_fault:false,recovery_can_start:uncertain&&phase!=='collecting',recovery_phase:phase,can_feed:!uncertain,can_defrost:!uncertain,can_refilled:!uncertain,blocked_reason:null,...overrides}),
+    'sensor.demo_quick':st('idle',{command:'none',minutes:null}),
+    'sensor.demo_history':st(2,{basis:'ha_observed',dp151_supported:false,events:[{kind:'legacy_feed',compartment:1,at:'2026-11-12T08:00:00Z',source_dp:null,report_value:null},{kind:'feeding',compartment:2,at:'2026-11-12T09:00:00Z',source_dp:14,report_value:2}]}),
+  };
+}
 export const SCENARIOS = {
+  ...Object.fromEntries(['idle','awaiting_user_confirmation','collecting','resolved','failed'].map(phase => [`parity-${phase}`,[parityConfig,parityStates(phase)]])),
+  'parity-storage-fault':[parityConfig,parityStates('awaiting_user_confirmation',{storage_fault:true,recovery_can_start:false,blocked_reason:'storage_fault'})],
   'freshfeed-ready-high': [ffConfig, ffStates({ status: 'standby', food: 'high', counter: 2 })],
   'freshfeed-feeding-low': [ffConfig, ffStates({ status: 'feeding', food: 'low', counter: 4 })],
   'freshfeed-empty': [ffConfig, ffStates({ status: 'no_food', food: 'empty', counter: 6 })],
@@ -215,7 +234,7 @@ for (const theme of ['light', 'dark']) {
     grid.appendChild(cell);
   }
 }
-window.__harness = { SCENARIOS, makeHass, ffConfig, aqConfig, ffStates, aqStates };
+window.__harness = { SCENARIOS, makeHass, ffConfig, aqConfig, ffStates, aqStates, parityConfig, parityStates };
 window.__ready = true;
 </script>
 </body>

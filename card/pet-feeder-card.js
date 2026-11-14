@@ -1,6 +1,7 @@
 /*
  * pet-feeder-card -- Home Assistant Lovelace custom card for pet feeders.
  */
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView } from './freshfeed-model.js?v=1';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -333,6 +334,14 @@ export function validateConfig(config) {
   if (!['hopper', 'bowl'].includes(c.art_level)) {
     throw new Error(`pet-feeder-card: art_level must be hopper or bowl, got '${c.art_level}'`);
   }
+  if (config.freshfeed != null) {
+    const keys = ['entry_id', 'schedule_entity', 'write_status_entity', 'quick_feed_entity', 'history_entity'];
+    if (c.model !== 'freshfeed' || c.mode !== 'standard' || typeof config.freshfeed !== 'object' || Array.isArray(config.freshfeed) || keys.some((key) => typeof config.freshfeed[key] !== 'string' || !config.freshfeed[key].trim()) || Object.keys(config.freshfeed).some((key) => !keys.includes(key))) {
+      throw new Error('pet-feeder-card: freshfeed requires all five fields in FreshFeed standard mode');
+    }
+    if (config.freshfeed.entry_id === 'REPLACE_WITH_INTEGRATION_ENTRY_ID') throw new Error('pet-feeder-card: bind the FreshFeed integration entry_id before use');
+    c.freshfeed = { ...config.freshfeed };
+  }
   if (c.mode === 'raw') {
     if (config.entities != null && (typeof config.entities !== 'object' || Array.isArray(config.entities) || Object.keys(config.entities).length)) {
       throw new Error('pet-feeder-card: entities cannot be used in raw mode');
@@ -384,10 +393,12 @@ export function validateConfig(config) {
     if (!a || typeof a.action !== 'string' || !/^[a-z0-9_]+\.[a-z0-9_]+$/.test(a.action)) {
       throw new Error(`pet-feeder-card: actions[${i}].action must be 'domain.service'`);
     }
+    if (c.freshfeed && (a.action !== 'petsafe_freshfeed.command' || !['feed', 'defrost', 'refilled'].includes(a.data?.operation) || Object.keys(a.data || {}).length !== 1 || a.target || a.confirm === false)) throw new Error('pet-feeder-card: parity actions must be confirmed FreshFeed commands');
     return { icon: 'mdi:gesture-tap-button', name: a.action, ...a, confirm: a.confirm !== false };
   });
   const controls = c.controls == null ? [] : c.controls;
   if (!Array.isArray(controls)) throw new Error('pet-feeder-card: controls must be a list of entity ids');
+  if (c.freshfeed && controls.some(id => /^(text|button)\./.test(id))) throw new Error('pet-feeder-card: raw text and button controls are unavailable in parity mode');
   c.controls = [...controls];
   return c;
 }
@@ -1211,6 +1222,7 @@ export class PetFeederCard extends Base {
     this._armTimer = null;
     this._tick = null;
     this._disconnectTimer = null;
+    this._reparentFocus = null;
     this._dialogRows = [];
     // The single in-card controls overlay. An overlay that is still being built
     // (rows load asynchronously) is tracked by
@@ -1245,6 +1257,7 @@ export class PetFeederCard extends Base {
   set hass(hass) {
     this._hass = hass;
     for (const row of this._dialogRows) row.hass = hass;
+    if (this._dialog?.freshfeed) this._updateFreshfeedStatus();
     if (!this._config) return; // setConfig not called yet; it will render
     if (this._changed()) this._render();
   }
@@ -1258,6 +1271,10 @@ export class PetFeederCard extends Base {
     this._disconnectTimer = null;
     if (!this._tick) this._tick = setInterval(() => this._render(), TICK_MS);
     this._render();
+    const target = this._reparentFocus;
+    this._reparentFocus = null;
+    const active = this.ownerDocument?.activeElement;
+    if (target?.isConnected && this.shadowRoot?.contains(target) && (!active || active === this.ownerDocument.body)) target.focus();
   }
 
   disconnectedCallback() {
@@ -1269,6 +1286,7 @@ export class PetFeederCard extends Base {
     this._disconnectTimer = setTimeout(() => {
       this._disconnectTimer = null;
       if (!this.isConnected) {
+        this._reparentFocus = null;
         this._closeControls();
         this._disarm(false);
       }
@@ -1280,6 +1298,7 @@ export class PetFeederCard extends Base {
     const c = this._config;
     if (c.mode === 'raw') return [...c.raw_entities];
     const ids = new Set(Object.values(c.entities || {}).filter(Boolean));
+    if (c.freshfeed) for (const key of ['schedule_entity', 'write_status_entity', 'quick_feed_entity', 'history_entity']) ids.add(c.freshfeed[key]);
     return [...ids];
   }
 
@@ -1302,6 +1321,13 @@ export class PetFeederCard extends Base {
     if (this._root) return;
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     this.shadowRoot.innerHTML = `<style>${STYLES}</style><ha-card></ha-card>`;
+    this.shadowRoot.addEventListener('focusin', (event) => { this._reparentFocus = event.target; });
+    this.shadowRoot.addEventListener('focusout', (event) => {
+      if (event.relatedTarget) this._reparentFocus = null;
+      else queueMicrotask(() => {
+        if (this.isConnected && this.shadowRoot.activeElement !== this._reparentFocus) this._reparentFocus = null;
+      });
+    });
     this._root = this.shadowRoot.querySelector('ha-card');
     this._root.addEventListener('click', (ev) => this._onClick(ev));
     this._root.addEventListener('keydown', (ev) => {
@@ -1314,6 +1340,9 @@ export class PetFeederCard extends Base {
 
   _render() {
     if (!this._config || typeof this.attachShadow !== 'function') return;
+    // Keep the open dialog attached: replacing its ancestor loses keyboard focus
+    // and can interrupt native time-input editing. Refresh the card on close.
+    if (this._dialog?.freshfeed) { this._updateFreshfeedStatus(); return; }
     this._ensureRoot();
     this._remember();
     const c = this._config;
@@ -1327,7 +1356,8 @@ export class PetFeederCard extends Base {
       .map((a, i) => {
         const armed = this._armed === i;
         const title = armed ? 'Tap again to confirm' : a.name;
-        return `<button class="round action${armed ? ' armed' : ''}" data-action="${i}" title="${esc(title)}" aria-label="${esc(title)}">${icon(armed ? 'mdi:check' : a.icon)}</button>`;
+        const disabled = c.freshfeed && !this._canFreshfeedAction(a.data.operation);
+        return `<button class="round action${armed ? ' armed' : ''}" data-action="${i}" title="${esc(title)}" aria-label="${esc(title)}"${disabled ? ' disabled' : ''}>${icon(armed ? 'mdi:check' : a.icon)}</button>`;
       })
       .join('');
 
@@ -1383,7 +1413,7 @@ export class PetFeederCard extends Base {
         </div>
       </div>
       <div class="body${c.model === 'freshfeed' ? ' wide' : ''}">
-        ${c.controls.length ? `<button class="round menu" data-menu title="Controls" aria-label="Controls">${icon('mdi:menu')}</button>` : ''}
+        ${(c.controls.length || c.freshfeed) ? `<button class="round menu" data-menu title="Controls" aria-label="Controls">${icon('mdi:menu')}</button>` : ''}
         ${actions ? `<div class="actions">${actions}</div>` : ''}
         ${m.camera ? `<button class="round camera"${more(m.camera)} title="Camera" aria-label="Camera">${icon('mdi:cctv')}</button>` : ''}
         <div class="art">${renderArt(m.art)}</div>
@@ -1436,7 +1466,8 @@ export class PetFeederCard extends Base {
   _onAction(i) {
     if (this._config?.mode === 'raw') return;
     const a = this._config.actions[i];
-    if (!a) return;
+    if (!a || this._config.mode === 'raw') return;
+    if (this._config.freshfeed && !this._canFreshfeedAction(a.data.operation)) { this._disarm(false); return; }
     if (a.confirm && this._armed !== i) {
       // First tap only arms the button; dispensing needs a second tap within CONFIRM_MS.
       this._disarm(false);
@@ -1447,6 +1478,12 @@ export class PetFeederCard extends Base {
     }
     this._disarm(false);
     this._render();
+    if (this._config.freshfeed) {
+      this._freshfeedCommandPending = true;
+      this._render();
+      Promise.resolve().then(() => this._hass.callService('petsafe_freshfeed', 'command', { entry_id: this._config.freshfeed.entry_id, operation: a.data.operation, confirmed: true })).catch(err => console.error('pet-feeder-card: command rejected', err)).finally(() => { this._freshfeedCommandPending = false; this._render(); });
+      return;
+    }
     const [domain, service] = a.action.split('.');
     if (!this._hass || typeof this._hass.callService !== 'function') {
       console.error(`pet-feeder-card: hass is not available, cannot call ${a.action}`);
@@ -1498,11 +1535,174 @@ export class PetFeederCard extends Base {
       if (e.target === ov) this._closeControls();
     });
     this._dialog = { el: ov };
+    if (c.freshfeed) this._buildFreshfeed(box);
     this._root.appendChild(ov);
+  }
+
+  _canFreshfeedAction(operation) {
+    const view = freshfeedView(this._config, this._hass);
+    if (this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState)) return false;
+    if (operation === 'feed') return view.canFeed && !['pending', 'feeding'].includes(view.quickFeed.status) && view.quickFeed.status !== null;
+    if (operation === 'defrost') return view.canDefrost && view.quickFeed.status !== null && view.quickFeed.status !== 'pending';
+    return operation === 'refilled' && view.canRefilled;
+  }
+
+  _buildFreshfeed(box) {
+    const section = document.createElement('section');
+    section.innerHTML = '<h3>Schedule</h3><p data-freshness></p><p data-message role="status"></p><div data-editor></div><div data-actions></div><div data-write-status></div><div data-recovery></div><div data-history></div>';
+    box.appendChild(section);
+    this._dialog.freshfeed = { section, draft: createScheduleDraft(freshfeedView(this._config, this._hass).schedule), error: null };
+    this._renderScheduleEditor();
+  }
+
+  _renderScheduleEditor() {
+    const d = this._dialog?.freshfeed;
+    if (!d) return;
+    const editor = d.section.querySelector('[data-editor]');
+    const actions = d.section.querySelector('[data-actions]');
+    editor.replaceChildren();
+    actions.replaceChildren();
+    if (d.draft) {
+      const days = [['Sun', 0], ['Mon', 6], ['Tue', 5], ['Wed', 4], ['Thu', 3], ['Fri', 2], ['Sat', 1]];
+      d.draft.entries.forEach((row, index) => {
+        const field = document.createElement('fieldset');
+        const legend = document.createElement('legend');
+        legend.textContent = `Meal ${index + 1}`;
+        field.appendChild(legend);
+        const label = document.createElement('label');
+        label.textContent = 'Time ';
+        const input = document.createElement('input');
+        input.type = 'time';
+        input.value = Number.isInteger(row.hour) && Number.isInteger(row.minute) ? `${String(row.hour).padStart(2, '0')}:${String(row.minute).padStart(2, '0')}` : '';
+        input.addEventListener('input', () => {
+          const match = /^(\d{2}):(\d{2})$/.exec(input.value);
+          row.hour = match ? Number(match[1]) : null;
+          row.minute = match ? Number(match[2]) : null;
+          this._updateFreshfeedStatus();
+        });
+        label.appendChild(input);
+        field.appendChild(label);
+        for (const [day, bit] of days) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = day;
+          button.setAttribute('aria-label', `${day} meal ${index + 1}`);
+          button.setAttribute('aria-pressed', String(Boolean(row.weekmask & (1 << bit))));
+          button.addEventListener('click', () => {
+            row.weekmask ^= 1 << bit;
+            button.setAttribute('aria-pressed', String(Boolean(row.weekmask & (1 << bit))));
+            this._updateFreshfeedStatus();
+          });
+          field.appendChild(button);
+        }
+        for (const key of ['enabled', 'audible']) {
+          const wrap = document.createElement('label');
+          const check = document.createElement('input');
+          check.type = 'checkbox';
+          check.checked = row[key];
+          check.addEventListener('change', () => { row[key] = check.checked; this._updateFreshfeedStatus(); });
+          wrap.append(check, document.createTextNode(` ${key === 'enabled' ? 'Enabled' : 'Audible'}`));
+          field.appendChild(wrap);
+        }
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.textContent = 'Delete';
+        remove.setAttribute('aria-label', `Delete meal ${index + 1}`);
+        remove.addEventListener('click', () => { d.draft.entries.splice(index, 1); this._renderScheduleEditor(); });
+        field.appendChild(remove);
+        editor.appendChild(field);
+      });
+      const add = document.createElement('button');
+      add.type = 'button'; add.textContent = 'Add meal'; add.disabled = d.draft.entries.length >= 10;
+      add.addEventListener('click', () => { if (d.draft.entries.length < 10) { d.draft.entries.push({ weekmask: 127, hour: 8, minute: 0, enabled: true, audible: true }); this._renderScheduleEditor(); } });
+      actions.appendChild(add);
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => { d.draft = createScheduleDraft(freshfeedView(this._config, this._hass).schedule); d.error = null; this._renderScheduleEditor(); });
+      actions.appendChild(cancel);
+      const save = document.createElement('button');
+      save.type = 'button'; save.textContent = 'Save'; save.dataset.save = '';
+      save.addEventListener('click', async () => {
+        this._updateFreshfeedStatus();
+        if (save.disabled || this._freshfeedSaving || this._config.mode === 'raw') return;
+        this._freshfeedSaving = true; d.error = null; this._updateFreshfeedStatus();
+        try {
+          await this._hass.callService('petsafe_freshfeed', 'save_schedule', scheduleSaveData(this._config.freshfeed.entry_id, d.draft));
+        } catch {
+          d.error = 'Schedule save rejected. Your edits were retained.';
+        } finally { this._freshfeedSaving = false; this._updateFreshfeedStatus(); }
+      });
+      actions.appendChild(save);
+    }
+    this._updateFreshfeedStatus();
+  }
+
+  _updateFreshfeedStatus() {
+    const d = this._dialog?.freshfeed;
+    if (!d) return;
+    const view = freshfeedView(this._config, this._hass);
+    if (!d.draft && view.draftAvailable) {
+      d.draft = createScheduleDraft(view.schedule);
+      this._renderScheduleEditor();
+      return;
+    }
+    d.section.querySelector('[data-freshness]').textContent = `${view.freshnessLabel}${view.lastSeen ? ` — last seen ${view.lastSeen}` : ''}`;
+    const conflict = Boolean(d.draft && view.schedule.revision !== d.draft.baseRevision);
+    const valid = d.draft && validateScheduleDraft(d.draft.entries);
+    d.section.querySelector('[data-message]').textContent = d.error || (!d.draft ? 'Schedule unavailable until a device report is observed.' : conflict ? 'Schedule changed on the device. Cancel and reopen your edits.' : valid?.error || '');
+    const save = d.section.querySelector('[data-save]');
+    if (save) save.disabled = this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || conflict || !valid?.valid || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState);
+    const status = d.section.querySelector('[data-write-status]');
+    status.textContent = view.writeState === 'pending' ? 'Submitted; not yet verified.' : view.writeState === 'verified' ? 'Device status observed.' : view.writeState === 'uncertain' ? 'Outcome uncertain.' : view.writeState === 'blocked' ? 'Writes blocked.' : '';
+    if (view.storageFault || view.integrityFault) status.textContent += ' Storage or integrity fault; recovery cannot repair it.';
+    const history = d.section.querySelector('[data-history]');
+    const historySignature = JSON.stringify([view.history.events, this._hass.config?.time_zone]);
+    if (d.historySignature !== historySignature) {
+      d.historySignature = historySignature;
+      history.replaceChildren();
+      const heading = document.createElement('h3'); heading.textContent = 'HA-observed history'; history.appendChild(heading);
+      if (!view.history.events.length) { const empty = document.createElement('p'); empty.textContent = 'No HA-observed events yet.'; history.appendChild(empty); }
+      for (const event of view.history.events) {
+        const row = document.createElement('p'); const date = typeof event.at === 'string' && event.at.trim() ? new Date(event.at) : new Date(NaN);
+        const localSource = ['skipped_empty', 'skipped_fault'].includes(event.kind) ? 'DP14-derived local event' : ['dispensed', 'refilled'].includes(event.kind) ? 'DP145-derived local event' : 'local event; source unknown';
+        row.textContent = `${Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { timeZone: this._hass.config?.time_zone, timeZoneName: 'short' }) : 'Unknown time'} — ${event.kind}${event.source_dp == null ? ` (HA-observed ${localSource})` : ` (DP${event.source_dp})`}${event.compartment == null ? '' : ` — compartment ${event.compartment}`}${event.report_value == null ? '' : ` — report value ${event.report_value}`}`;
+        history.appendChild(row);
+      }
+      const note = document.createElement('p'); note.textContent = 'DP151 history is unsupported.'; history.appendChild(note);
+    }
+    const recovery = d.section.querySelector('[data-recovery]');
+    let text = recovery.querySelector('[data-recovery-message]');
+    if (!text) {
+      text = document.createElement('p'); text.setAttribute('data-recovery-message', '');
+      recovery.appendChild(text);
+    }
+    text.textContent = '';
+    if (view.recoveryPhase === 'collecting') text.textContent = 'Waiting for device reports (up to 35 seconds).';
+    else if (view.recoveryPhase === 'resolved') text.textContent = 'Local uncertainty cleared; this does not confirm physical success.';
+    else if (view.recoveryPhase === 'awaiting_user_confirmation' || view.recoveryPhase === 'failed') {
+      text.textContent = `Check the device. Uncertainty returns after restart. Operation: ${view.operation || 'unknown'} (${view.operationId || 'unknown'}); session: ${view.sessionId || 'unknown'}.${view.reason ? ` ${view.reason}` : ''}${view.blockedReason ? ` ${view.blockedReason}` : ''}`;
+    }
+    let button = recovery.querySelector('[data-recover]');
+    if (!button) {
+      button = document.createElement('button'); button.dataset.recover = '';
+      button.type = 'button'; button.textContent = 'Check and clear uncertainty';
+      button.addEventListener('click', async () => {
+        this._updateFreshfeedStatus();
+        if (button.disabled || button.hidden || this._freshfeedRecovering || this._config.mode === 'raw' || !globalThis.confirm('Check the device and clear local uncertainty after fresh reports?')) return;
+        const current = freshfeedView(this._config, this._hass);
+        this._freshfeedRecovering = true; d.error = null; this._updateFreshfeedStatus();
+        try { await this._hass.callService('petsafe_freshfeed', 'recover', { entry_id: this._config.freshfeed.entry_id, operation_id: current.operationId, session_id: current.sessionId, confirmed: true }); }
+        catch { d.error = 'Recovery request rejected.'; }
+        finally { this._freshfeedRecovering = false; this._updateFreshfeedStatus(); }
+      });
+      recovery.appendChild(button);
+    }
+    button.hidden = !['awaiting_user_confirmation', 'failed'].includes(view.recoveryPhase) || view.storageFault || view.integrityFault;
+    button.disabled = button.hidden || this._freshfeedCommandPending || this._freshfeedRecovering || this._freshfeedSaving || !view.recoveryCanStart || !view.operationId || !view.sessionId;
   }
 
   /** Close and remove the controls dialog, including one still being built. */
   _closeControls() {
+    this._reparentFocus = null;
     this._dialogGen++;
     this._dialogOpening = null;
     const d = this._dialog;
@@ -1510,6 +1710,7 @@ export class PetFeederCard extends Base {
     this._dialogRows = [];
     if (!d) return;
     d.el.remove();
+    if (d.freshfeed) this._render();
   }
 
   async _createRows(entities) {
