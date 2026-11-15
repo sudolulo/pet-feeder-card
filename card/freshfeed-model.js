@@ -44,11 +44,12 @@ export function freshfeedView(config, hass) {
     lastSeen: schedule.observed_at,
     writeState: s.state ?? status?.state ?? 'blocked', operationId: s.operation_id ?? null,
     operation: s.operation ?? null, sessionId: s.session_id ?? null, reason: s.reason ?? null,
+    observedFailure: s.observed_failure && ['operation_id', 'operation', 'session_id'].every(key => typeof s.observed_failure[key] === 'string' && s.observed_failure[key]) ? { operationId: s.observed_failure.operation_id, operation: s.observed_failure.operation, sessionId: s.observed_failure.session_id } : null,
     storageFault: s.storage_fault === true, integrityFault: s.integrity_fault === true,
     recoveryCanStart: s.recovery_can_start === true, recoveryPhase: s.recovery_phase ?? 'idle',
     canFeed: s.can_feed === true, canDefrost: s.can_defrost === true, canRefilled: s.can_refilled === true,
-    blockedReason: s.blocked_reason ?? null,
-    quickFeed: { status: ['idle', 'pending', 'feeding', 'ready', 'failed'].includes(quick?.state) ? quick.state : null, command: ['none', 'start', 'cancel', 'now'].includes(q.command) ? q.command : null, minutes: Number.isFinite(q.minutes) ? q.minutes : null },
+    blockedReason: s.blocked_reason ?? null, canCancel: s.can_cancel === true, cancelReason: s.cancel_reason ?? null,
+    quickFeed: { status: ['idle', 'pending', 'feeding', 'ready', 'failed'].includes(quick?.state) ? quick.state : null, command: ['none', 'start', 'cancel', 'now'].includes(q.command) ? q.command : null, minutes: ['idle', 'pending', 'feeding', 'ready', 'failed'].includes(quick?.state) && Number.isFinite(q.minutes) ? q.minutes : null, haUpdated: typeof quick?.last_updated === 'string' && Number.isFinite(Date.parse(quick.last_updated)) ? quick.last_updated : null },
     history: { basis: 'ha_observed', events: Array.isArray(history?.events) ? copy(history.events).reverse() : [], dp151Supported: false },
   };
 }

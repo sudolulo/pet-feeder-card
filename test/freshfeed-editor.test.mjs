@@ -37,10 +37,10 @@ test('missing entities yield the complete safe view', () => {
   assert.deepEqual(freshfeedView({ freshfeed: {} }, { states: {} }), {
     schedule: { entries: null, source_state: 'unknown', observed_at: null, revision: null, source_entity_id: null, error: null },
     draftAvailable: false, freshnessLabel: 'Unknown', lastSeen: null,
-    writeState: 'blocked', operationId: null, operation: null, sessionId: null, reason: null,
+    writeState: 'blocked', operationId: null, operation: null, sessionId: null, reason: null, observedFailure: null,
     storageFault: false, integrityFault: false, recoveryCanStart: false, recoveryPhase: 'idle',
-    canFeed: false, canDefrost: false, canRefilled: false, blockedReason: null,
-    quickFeed: { status: null, command: null, minutes: null },
+    canFeed: false, canDefrost: false, canRefilled: false, blockedReason: null, canCancel: false, cancelReason: null,
+    quickFeed: { status: null, command: null, minutes: null, haUpdated: null },
     history: { basis: 'ha_observed', events: [], dp151Supported: false },
   });
 });
@@ -56,7 +56,7 @@ test('projects sensor data and copies history newest first', () => {
   assert.equal(view.lastSeen, 'then');
   assert.equal(view.writeState, 'uncertain');
   assert.equal(view.canFeed, true);
-  assert.deepEqual(view.quickFeed, { status: 'feeding', command: 'start', minutes: 3 });
+  assert.deepEqual(view.quickFeed, { status: 'feeding', command: 'start', minutes: 3, haUpdated: null });
   assert.deepEqual(view.history.events.map(e => e.kind), ['second', 'first']);
   view.schedule.entries[0].hour = 1;
   view.history.events[0].kind = 'changed';

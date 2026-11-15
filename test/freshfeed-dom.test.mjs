@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const failureView = () => JSON.parse(readFileSync(new URL('./fixtures/cancel-observed-failure.json', import.meta.url), 'utf8'));
 import { PetFeederCard, validateConfig } from '../card/pet-feeder-card.js';
 
 const config = () => ({model:'freshfeed',entities:{},freshfeed:{entry_id:'entry',schedule_entity:'s',write_status_entity:'w',quick_feed_entity:'q',history_entity:'h'}});
@@ -26,12 +28,235 @@ function setup(){
   globalThis.document={createElement:(tag)=>new Element(tag),createTextNode:(text)=>({textContent:text,children:[]})};
   const card=new PetFeederCard(); card._config=validateConfig(config()); card._render=()=>{};
   const section=new Element('section'); const editor=new Element();const actions=new Element();const recovery=new Element();const history=new Element();const freshness=new Element('p'),message=new Element('p'),writeStatus=new Element('p');
-  section.querySelector=(s)=>({'[data-editor]':editor,'[data-actions]':actions,'[data-recovery]':recovery,'[data-history]':history,'[data-freshness]':freshness,'[data-message]':message,'[data-write-status]':writeStatus}[s]||actions.querySelector(s));
+  const quickStatus=new Element('p'), quickTime=new Element('p'), cancelButton=new Element('button'), cancelMessage=new Element('p');
+  section.querySelector=(s)=>({'[data-quick-status]':quickStatus,'[data-quick-time]':quickTime,'[data-cancel-countdown]':cancelButton,'[data-cancel-message]':cancelMessage,'[data-editor]':editor,'[data-actions]':actions,'[data-recovery]':recovery,'[data-history]':history,'[data-freshness]':freshness,'[data-message]':message,'[data-write-status]':writeStatus}[s]||actions.querySelector(s));
   card._dialog={freshfeed:{section,draft:null,error:null},el:new Element()};
   card._hass={config:{time_zone:'UTC'},states:{s:{state:'unknown',attributes:{source_state:'unknown',entries:null,revision:null}},w:{state:'idle',attributes:{can_feed:true,can_defrost:true,can_refilled:true,recovery_phase:'idle'}},q:{state:'idle',attributes:{status:'idle',minutes:null}},h:{state:'0',attributes:{events:[],basis:'ha_observed'}}},callService:async()=>{}};
-  return {card,section,editor,actions,recovery,history,freshness,message,writeStatus};
+  return {card,section,editor,actions,recovery,history,freshness,message,writeStatus,quickStatus,quickTime,cancelButton,cancelMessage};
 }
 test.afterEach(()=>{globalThis.document=originalDocument;globalThis.confirm=originalConfirm;});
+
+test('corresponding backend terminal Cancel failure releases latch without claiming success or resending',async()=>{
+  const {card,actions,cancelMessage,writeStatus}=editable(); let calls=0;
+  card._hass.states.w={state:'idle',attributes:{can_cancel:true,session_id:'session'}};
+  card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._hass.callService=async()=>calls++;
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(button(actions,'Save').disabled,true);
+  card._hass.states.w=failureView(); card._hass.states.q={state:'failed',attributes:{command:'cancel',minutes:0}};
+  card._updateFreshfeedStatus();
+  assert.equal(card._entryCancelLatch(),null);
+  assert.match(cancelMessage.textContent,/Cancel failed.*device status observed/i);
+  assert.equal(writeStatus.textContent,'');
+  assert.equal(button(actions,'Save').disabled,false);
+  assert.equal(card._canFreshfeedAction('feed'),true);
+  assert.equal(card._canFreshfeedAction('defrost'),true);
+  assert.equal(card._canFreshfeedAction('refilled'),false);
+  card._hass.states.w.attributes.can_refilled=true; card._updateFreshfeedStatus();
+  assert.equal(card._canFreshfeedAction('refilled'),true);
+  const dialog=card._dialog; dialog.el.remove=()=>{}; card._closeControls(); card._dialog=dialog; card._updateFreshfeedStatus();
+  assert.match(cancelMessage.textContent,/Cancel failed/); assert.equal(calls,1);
+  card._hass.states.w.attributes.can_feed=false; card._updateFreshfeedStatus();
+  assert.equal(card._canFreshfeedAction('feed'),false);
+});
+
+for (const mismatch of ['missing metadata','session','view session','operation','baseline failure','baseline operation','pending']) {
+  test(`terminal failure cannot release Cancel on ${mismatch}`,async()=>{
+    const {card,cancelMessage}=setup();
+    card._hass.states.w=failureView();
+    card._hass.states.w.attributes.can_cancel=true;
+    if(mismatch==='baseline operation') card._hass.states.w.attributes.operation_id='new-cancel';
+    card._hass.states.q={state:'pending',attributes:{minutes:1}};
+    card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+    await new Promise(resolve=>setImmediate(resolve));
+    const terminal=failureView(); terminal.attributes.observed_failure.operation_id='new-cancel';
+    if(mismatch==='missing metadata') delete terminal.attributes.observed_failure;
+    if(mismatch==='session') terminal.attributes.observed_failure.session_id='other';
+    if(mismatch==='view session') terminal.attributes.session_id='other';
+    if(mismatch==='operation') terminal.attributes.observed_failure.operation='feed';
+    if(mismatch==='baseline failure') terminal.attributes.observed_failure.operation_id='cancel-op';
+    if(mismatch==='pending') terminal.state='pending';
+    card._hass.states.w=terminal; card._hass.states.q={state:'failed',attributes:{command:'cancel'}};
+    card._updateFreshfeedStatus(); assert.ok(card._entryCancelLatch()); assert.equal(cancelMessage.textContent,'Submitted');
+  });
+}
+
+test('cancel requires two taps and stays latched across stale updates',async()=>{
+  const {card,cancelButton,quickStatus}=setup(); const calls=[];
+  card._hass.states.w={state:'idle',attributes:{can_cancel:true,operation_id:'old',session_id:'session'}};
+  card._hass.states.q={state:'pending',attributes:{minutes:0}}; card._hass.callService=async(...args)=>calls.push(args);
+  card._updateFreshfeedStatus(); assert.match(quickStatus.textContent,/0 minutes; waiting for status/);
+  card._onCancelCountdown(); assert.equal(calls.length,0); card._onCancelCountdown(); await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(calls,[['petsafe_freshfeed','command',{entry_id:'entry',operation:'cancel',confirmed:true}]]);
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); assert.equal(calls.length,1); assert.equal(cancelButton.disabled,true);
+});
+
+for (const ambiguousFailure of [false, true]) {
+  test(`stale verified status does not certify latched Cancel (${ambiguousFailure ? 'uncertain' : 'submitted'})`,async()=>{
+    const {card,writeStatus,cancelMessage}=setup();
+    card._hass.states.w={state:'verified',attributes:{can_cancel:true,operation_id:'old',operation:'start',session_id:'session'}};
+    card._hass.states.q={state:'pending',attributes:{minutes:2}};
+    card._hass.callService=async()=>{if(ambiguousFailure) throw Error('connection lost');};
+    card._updateFreshfeedStatus(); assert.equal(writeStatus.textContent,'Device status observed.');
+    card._onCancelCountdown(); card._onCancelCountdown();
+    await new Promise(resolve=>setImmediate(resolve));
+    for(let update=0;update<2;update++) {
+      card._hass.states.w={...card._hass.states.w,attributes:{...card._hass.states.w.attributes}};
+      card._updateFreshfeedStatus();
+      assert.equal(cancelMessage.textContent,ambiguousFailure ? 'Outcome uncertain' : 'Submitted');
+      assert.doesNotMatch(writeStatus.textContent,/Device status observed/);
+    }
+    Object.assign(card._hass.states.w.attributes,{operation_id:'cancel-op',operation:'cancel'});
+    card._hass.states.q={state:'idle',attributes:{command:'cancel'}};
+    card._updateFreshfeedStatus();
+    assert.equal(writeStatus.textContent,'Device status observed.');
+    assert.equal(cancelMessage.textContent,'Device status observed');
+  });
+}
+
+test('cancel disarms on eligibility loss and requires matching verified cancel idle',async()=>{
+  const {card,cancelButton,cancelMessage}=setup(); const calls=[];
+  const attrs={can_cancel:true,operation_id:'old',session_id:'session'};
+  card._hass.states.w={state:'idle',attributes:attrs}; card._hass.states.q={state:'pending',attributes:{minutes:255}}; card._hass.callService=async(...args)=>calls.push(args);
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); attrs.can_cancel=false; card._updateFreshfeedStatus(); attrs.can_cancel=true; card._updateFreshfeedStatus();
+  card._onCancelCountdown(); assert.equal(calls.length,0); card._onCancelCountdown(); await Promise.resolve(); await Promise.resolve();
+  attrs.operation_id='new'; attrs.session_id='other'; attrs.operation='cancel'; card._hass.states.w.state='verified'; card._hass.states.q={state:'idle',attributes:{command:'cancel'}}; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  attrs.session_id='session'; card._hass.states.q.attributes.command='start'; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  card._hass.states.q.attributes.command='cancel'; card._updateFreshfeedStatus(); assert.equal(card._cancelLatch,null); assert.match(cancelMessage.textContent,/Device status observed/); assert.equal(cancelButton.hidden,true);
+});
+
+for (const change of ['operation', 'pending report', 'session', 'entry']) {
+  test(`verified Cancel outcome is invalidated by a different ${change}`,async()=>{
+    const {card,cancelMessage}=setup();
+    const attrs={can_cancel:true,operation_id:'old',session_id:'session'};
+    card._hass.states.w={state:'idle',attributes:attrs}; card._hass.states.q={state:'pending',attributes:{minutes:1}};
+    card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+    Object.assign(attrs,{operation_id:'cancel-op',operation:'cancel'}); card._hass.states.w.state='verified';
+    card._hass.states.q={state:'idle',attributes:{command:'cancel'}}; card._updateFreshfeedStatus();
+    assert.match(cancelMessage.textContent,/Device status observed/);
+    card._updateFreshfeedStatus(); assert.match(cancelMessage.textContent,/Device status observed/);
+    if(change==='operation') attrs.operation_id='next-op';
+    if(change==='pending report') card._hass.states.q={state:'pending',attributes:{command:'start',minutes:5}};
+    if(change==='session') attrs.session_id='next-session';
+    if(change==='entry') card._config.freshfeed.entry_id='other-entry';
+    card._updateFreshfeedStatus(); assert.doesNotMatch(cancelMessage.textContent,/Device status observed/);
+  });
+}
+
+test('unresolved Cancel outcome stays with its entry across an asynchronous failure',async()=>{
+  const {card,cancelMessage}=setup(); let reject;
+  card._hass.states.w={state:'idle',attributes:{can_cancel:true,session_id:'session'}};
+  card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._hass.callService=()=>new Promise((resolve,rejectRequest)=>{reject=rejectRequest;});
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+  assert.equal(cancelMessage.textContent,'Submitted');
+  card._config.freshfeed.entry_id='other-entry'; card._updateFreshfeedStatus();
+  assert.equal(cancelMessage.textContent,'');
+  reject(Error('connection lost')); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(cancelMessage.textContent,'');
+  card._config.freshfeed.entry_id='entry'; card._updateFreshfeedStatus();
+  assert.equal(cancelMessage.textContent,'Outcome uncertain');
+});
+
+test('real HA service Cancel response releases only a proven rejection', {skip:!process.env.PETSAFE_CANCEL_SERVICE_RESULT}, async()=>{
+  const {initial,response,safe}=JSON.parse(process.env.PETSAFE_CANCEL_SERVICE_RESULT);
+  const {card,cancelMessage}=setup(); let calls=0;
+  card._hass.states.w={state:initial.state,attributes:initial};
+  card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._hass.callService=async()=>{calls++;if(!response.success) throw response.error;};
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls,1);
+  if(safe){
+    assert.equal(card._entryCancelLatch(),null);
+    assert.match(cancelMessage.textContent,/rejected/i);
+    card._updateFreshfeedStatus(); // stale pending cannot silently replay
+    assert.equal(calls,1);
+    card._onCancelCountdown(); assert.equal(calls,1);
+    card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(calls,2);
+  }else{
+    assert.ok(card._entryCancelLatch());
+    card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+    await new Promise(resolve=>setImmediate(resolve)); assert.equal(calls,1);
+  }
+});
+
+test('cancel rejection is visible and requires fresh confirmation',async()=>{
+  const {card,cancelMessage}=setup(); let calls=0;
+  card._hass.states.w={state:'idle',attributes:{can_cancel:true,session_id:'session'}}; card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._hass.callService=async()=>{calls++;throw {code:'service_validation_error'};}; card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+  await new Promise(resolve=>setImmediate(resolve)); assert.match(cancelMessage.textContent,/rejected/); card._onCancelCountdown(); assert.equal(calls,1); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve)); assert.equal(calls,2);
+});
+
+test('cancel close clears arm and stale state remains latched after reopen',async()=>{
+  const {card}=setup(); let calls=0; card._hass.states.w={state:'idle',attributes:{can_cancel:true,operation_id:'old',session_id:'session'}}; card._hass.states.q={state:'pending',attributes:{minutes:2}}; card._hass.callService=async()=>calls++;
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); const dialog=card._dialog; dialog.el.remove=()=>{}; card._closeControls(); card._dialog=dialog; card._updateFreshfeedStatus(); card._onCancelCountdown(); assert.equal(calls,0); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+  card._closeControls(); card._dialog=dialog; card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); assert.equal(calls,1);
+});
+
+test('ambiguous cancel transport failure retains latch against stale pending',async()=>{
+  const {card,cancelMessage}=setup(); let calls=0;
+  card._hass.states.w={state:'idle',attributes:{can_cancel:true,session_id:'session'}}; card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._hass.callService=async()=>{calls++;throw Error('connection lost');}; card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown();
+  await new Promise(resolve=>setImmediate(resolve)); assert.ok(card._cancelLatch); assert.match(cancelMessage.textContent,/uncertain/i);
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); assert.equal(calls,1);
+});
+
+test('recovery evidence must match accepted cancel recovery and session',async()=>{
+  const {card,recovery}=setup(); const attrs={can_cancel:true,operation_id:'old',session_id:'session'};
+  card._hass.states.w={state:'idle',attributes:attrs}; card._hass.states.q={state:'pending',attributes:{minutes:1}}; card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+  Object.assign(attrs,{operation_id:'new',operation:'cancel',recovery_phase:'awaiting_user_confirmation',recovery_can_start:true}); card._hass.states.w.state='uncertain'; card._updateFreshfeedStatus(); globalThis.confirm=()=>true;
+  card._hass.callService=async()=>{throw Error('rejected');}; await recovery.querySelector('[data-recover]').click();
+  attrs.recovery_phase='resolved'; card._hass.states.w.state='idle'; card._hass.states.q.state='idle'; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  attrs.recovery_phase='awaiting_user_confirmation'; card._hass.states.w.state='uncertain'; card._updateFreshfeedStatus(); card._hass.callService=async()=>{}; await recovery.querySelector('[data-recover]').click();
+  attrs.recovery_phase='resolved'; card._hass.states.w.state='idle'; attrs.session_id='other'; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  attrs.session_id='session'; attrs.operation_id='unrelated'; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  attrs.operation_id=null; attrs.operation=null; card._updateFreshfeedStatus(); assert.equal(card._cancelLatch,null);
+});
+
+test('accepted recovery in a restarted session releases only after safe idle',async()=>{
+  const {card,recovery}=setup();
+  const attrs={can_cancel:true,operation_id:'old',session_id:'session'};
+  card._hass.states.w={state:'idle',attributes:attrs}; card._hass.states.q={state:'pending',attributes:{minutes:1}};
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+  Object.assign(attrs,{operation_id:'new',session_id:'restarted',operation:'cancel',recovery_phase:'awaiting_user_confirmation',recovery_can_start:true}); card._hass.states.w.state='uncertain'; card._updateFreshfeedStatus();
+  globalThis.confirm=()=>true; await recovery.querySelector('[data-recover]').click();
+  Object.assign(attrs,{operation_id:null,operation:null,recovery_phase:'resolved'}); card._hass.states.w.state='idle'; card._hass.states.q.state='idle'; card._updateFreshfeedStatus();
+  assert.equal(card._cancelLatch,null);
+});
+
+test('cancel latch is scoped to entry and retained when switching back',()=>{
+  const {card,actions}=editable(); card._cancelLatch={entryId:'entry',operationId:'old',sessionId:'session'};
+  card._updateFreshfeedStatus(); assert.equal(button(actions,'Save').disabled,true);
+  card._config.freshfeed.entry_id='other'; card._updateFreshfeedStatus();
+  assert.equal(button(actions,'Save').disabled,false); assert.equal(card._canFreshfeedAction('refilled'),true);
+  card._config.freshfeed.entry_id='entry'; card._updateFreshfeedStatus(); assert.equal(button(actions,'Save').disabled,true);
+});
+
+test('uncertainty retains latch until explicit recovery and safe idle',async()=>{
+  const {card,recovery,cancelMessage}=setup(); const attrs={can_cancel:true,operation_id:'old',session_id:'session'};
+  card._hass.states.w={state:'idle',attributes:attrs}; card._hass.states.q={state:'pending',attributes:{minutes:1}}; card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+  Object.assign(attrs,{operation_id:'new',operation:'cancel',recovery_phase:'awaiting_user_confirmation',recovery_can_start:true}); card._hass.states.w.state='uncertain'; card._updateFreshfeedStatus(); assert.match(cancelMessage.textContent,/uncertain/i); assert.ok(card._cancelLatch);
+  globalThis.confirm=()=>true; await recovery.querySelector('[data-recover]').click(); attrs.recovery_phase='resolved'; card._hass.states.w.state='idle'; card._updateFreshfeedStatus(); assert.ok(card._cancelLatch);
+  attrs.operation_id=null; attrs.operation=null; card._hass.states.q.state='idle'; card._updateFreshfeedStatus(); assert.equal(card._cancelLatch,null);
+});
+
+test('reported countdown changes only with an HA report, not elapsed clock time',()=>{
+  const {card,quickStatus}=setup();
+  card._hass.states.q={state:'pending',attributes:{minutes:5}}; card._updateFreshfeedStatus();
+  assert.match(quickStatus.textContent,/5 minutes/); const text=quickStatus.textContent;
+  const now=Date.now; Date.now=()=>now()+86400000;
+  try {
+    card._updateFreshfeedStatus(); assert.equal(quickStatus.textContent,text);
+    card._hass.states.q={state:'pending',attributes:{minutes:2}}; card._updateFreshfeedStatus();
+    assert.match(quickStatus.textContent,/2 minutes/); assert.notEqual(quickStatus.textContent,text);
+    card._hass.states.q={state:'pending',attributes:{minutes:0}}; card._updateFreshfeedStatus();
+    const zero=quickStatus.textContent; assert.match(zero,/waiting for status/);
+    card._updateFreshfeedStatus(); assert.equal(quickStatus.textContent,zero);
+  } finally { Date.now=now; }
+});
 
 test('unknown schedule stays unavailable until a device report arrives',()=>{
   const {card,message,editor}=setup(); card._updateFreshfeedStatus();

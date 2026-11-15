@@ -21,7 +21,7 @@ test('history refreshes local time when HA timezone changes but preserves rows o
     const card = new PetFeederCard();
     card._config = validateConfig({ model: 'freshfeed', entities: {}, freshfeed: { entry_id: 'entry', schedule_entity: 's', write_status_entity: 'w', quick_feed_entity: 'q', history_entity: 'h' } });
     card._render = () => {};
-    const elements = Object.fromEntries(['freshness', 'message', 'write-status', 'history', 'recovery'].map(name => [`[data-${name}]`, new Element()]));
+    const elements = Object.fromEntries(['freshness', 'message', 'write-status', 'history', 'recovery', 'quick-status', 'quick-time', 'cancel-countdown', 'cancel-message'].map(name => [`[data-${name}]`, new Element()]));
     card._dialog = { freshfeed: { section: { querySelector: selector => elements[selector] || null }, draft: null, error: null }, el: new Element() };
     const event = { kind: 'dispensed', at: '2026-11-12T08:00:00Z', source_dp: 145 };
     const hass = { config: { time_zone: 'UTC' }, states: {

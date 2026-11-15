@@ -1539,9 +1539,19 @@ export class PetFeederCard extends Base {
     this._root.appendChild(ov);
   }
 
+  _entryCancelLatch() {
+    const entryId = this._config?.freshfeed?.entry_id;
+    return this._cancelLatches?.get(entryId) || (this._cancelLatch?.entryId === entryId ? this._cancelLatch : null);
+  }
+
+  _clearCancelLatch(latch) {
+    this._cancelLatches?.delete(latch.entryId);
+    if (this._cancelLatch === latch) this._cancelLatch = null;
+  }
+
   _canFreshfeedAction(operation) {
     const view = freshfeedView(this._config, this._hass);
-    if (this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState)) return false;
+    if (this._entryCancelLatch() || this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState)) return false;
     if (operation === 'feed') return view.canFeed && !['pending', 'feeding'].includes(view.quickFeed.status) && view.quickFeed.status !== null;
     if (operation === 'defrost') return view.canDefrost && view.quickFeed.status !== null && view.quickFeed.status !== 'pending';
     return operation === 'refilled' && view.canRefilled;
@@ -1549,10 +1559,57 @@ export class PetFeederCard extends Base {
 
   _buildFreshfeed(box) {
     const section = document.createElement('section');
-    section.innerHTML = '<h3>Schedule</h3><p data-freshness></p><p data-message role="status"></p><div data-editor></div><div data-actions></div><div data-write-status></div><div data-recovery></div><div data-history></div>';
+    section.innerHTML = '<h3>Quick feed status</h3><p data-quick-status></p><p data-quick-time></p><button type="button" data-cancel-countdown>Cancel countdown</button><p data-cancel-message role="status"></p><h3>Schedule</h3><p data-freshness></p><p data-message role="status"></p><div data-editor></div><div data-actions></div><div data-write-status></div><div data-recovery></div><div data-history></div>';
     box.appendChild(section);
     this._dialog.freshfeed = { section, draft: createScheduleDraft(freshfeedView(this._config, this._hass).schedule), error: null };
+    section.querySelector('[data-cancel-countdown]').addEventListener('click', () => this._onCancelCountdown());
     this._renderScheduleEditor();
+  }
+
+  _disarmCancel() {
+    clearTimeout(this._cancelArmTimer);
+    this._cancelArmTimer = null;
+    this._cancelArmed = false;
+    this._cancelArmSignature = null;
+  }
+
+  _cancelSignature(view) {
+    return JSON.stringify([view.writeState, view.operationId, view.sessionId, view.operation, view.quickFeed.status, view.quickFeed.command, view.quickFeed.minutes, view.observedFailure]);
+  }
+
+  _canCancelCountdown(view) {
+    return this._config?.mode === 'standard' && view.canCancel && view.quickFeed.status === 'pending' && !this._entryCancelLatch() && !this._freshfeedCommandPending && !this._freshfeedSaving && !this._freshfeedRecovering && !view.storageFault && !view.integrityFault && ['idle', 'verified'].includes(view.writeState);
+  }
+
+  _onCancelCountdown() {
+    if (!this._dialog?.freshfeed || !this._config?.freshfeed) return;
+    const view = freshfeedView(this._config, this._hass);
+    if (!this._canCancelCountdown(view)) { this._disarmCancel(); this._updateFreshfeedStatus(); return; }
+    if (this._cancelArmed && this._cancelArmSignature !== this._cancelSignature(view)) this._disarmCancel();
+    if (!this._cancelArmed) {
+      this._cancelArmed = true;
+      this._cancelArmSignature = this._cancelSignature(view);
+      this._cancelArmTimer = setTimeout(() => { this._disarmCancel(); this._updateFreshfeedStatus(); }, CONFIRM_MS);
+      this._updateFreshfeedStatus(); return;
+    }
+    this._disarmCancel();
+    this._cancelLatch = { operationId: view.operationId, failureOperationId: view.observedFailure?.operationId, sessionId: view.sessionId, entryId: this._config.freshfeed.entry_id };
+    const latch = this._cancelLatch;
+    (this._cancelLatches ||= new Map()).set(latch.entryId, latch);
+    this._cancelOutcome = null;
+    latch.outcome = 'Submitted';
+    this._freshfeedCommandPending = true;
+    this._updateFreshfeedStatus();
+    let request;
+    try { request = this._hass.callService('petsafe_freshfeed', 'command', { entry_id: latch.entryId, operation: 'cancel', confirmed: true }); }
+    catch (error) { request = Promise.reject(error); }
+    Promise.resolve(request).catch((error) => {
+      if (this._cancelLatches?.get(latch.entryId) !== latch) return;
+      if (error?.code === 'service_validation_error') {
+        this._clearCancelLatch(latch);
+        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Cancel request rejected. Confirm again to retry.' };
+      } else latch.outcome = 'Outcome uncertain';
+    }).finally(() => { this._freshfeedCommandPending = false; this._updateFreshfeedStatus(); this._render(); });
   }
 
   _renderScheduleEditor() {
@@ -1640,6 +1697,31 @@ export class PetFeederCard extends Base {
     const d = this._dialog?.freshfeed;
     if (!d) return;
     const view = freshfeedView(this._config, this._hass);
+    const latch = this._entryCancelLatch();
+    if (latch) {
+      const corresponding = latch.sessionId && view.sessionId === latch.sessionId && view.operationId && view.operationId !== latch.operationId;
+      if (corresponding && view.operation === 'cancel' && view.writeState === 'verified' && view.quickFeed.status === 'idle' && view.quickFeed.command === 'cancel') {
+        this._clearCancelLatch(latch);
+        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Device status observed' };
+      } else if (latch.sessionId && view.sessionId === latch.sessionId && view.writeState === 'idle' && view.reason === 'observed_failure' && view.operationId === null && view.operation === null && view.observedFailure?.operation === 'cancel' && view.observedFailure.sessionId === latch.sessionId && view.observedFailure.operationId !== latch.operationId && view.observedFailure.operationId !== latch.failureOperationId && !view.storageFault && !view.integrityFault) {
+        this._clearCancelLatch(latch);
+        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Cancel failed — device status observed' };
+      } else if (latch.recovery && view.sessionId === latch.recovery.sessionId && view.operationId === null && view.operation === null && view.recoveryPhase === 'resolved' && view.writeState === 'idle' && view.quickFeed.status === 'idle' && !view.storageFault && !view.integrityFault) {
+        this._clearCancelLatch(latch);
+        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Local uncertainty cleared; device status observed.' };
+      } else if (view.writeState === 'uncertain') latch.outcome = 'Outcome uncertain';
+    }
+    // Completed observations describe only this entry and this reported operation/state.
+    if (this._cancelOutcome && (this._cancelOutcome.entryId !== this._config.freshfeed.entry_id || this._cancelOutcome.signature !== this._cancelSignature(view))) this._cancelOutcome = null;
+    const eligible = this._canCancelCountdown(view);
+    if (!eligible || (this._cancelArmed && this._cancelArmSignature !== this._cancelSignature(view))) this._disarmCancel();
+    const quick = view.quickFeed;
+    d.section.querySelector('[data-quick-status]').textContent = quick.status === 'pending' ? (quick.minutes === null ? 'Pending — minutes unknown' : quick.minutes === 0 ? 'Pending — device reports 0 minutes; waiting for status' : `Pending — device reports ${quick.minutes} minutes remaining`) : quick.status ? quick.status[0].toUpperCase() + quick.status.slice(1) : 'Unknown';
+    d.section.querySelector('[data-quick-time]').textContent = quick.haUpdated ? `HA state updated ${quick.haUpdated}` : '';
+    const cancel = d.section.querySelector('[data-cancel-countdown]');
+    cancel.hidden = quick.status !== 'pending'; cancel.disabled = !eligible;
+    cancel.textContent = this._cancelArmed ? 'Confirm cancel countdown' : 'Cancel countdown';
+    d.section.querySelector('[data-cancel-message]').textContent = this._entryCancelLatch()?.outcome || this._cancelOutcome?.text || (!eligible ? view.cancelReason || '' : '');
     if (!d.draft && view.draftAvailable) {
       d.draft = createScheduleDraft(view.schedule);
       this._renderScheduleEditor();
@@ -1650,9 +1732,9 @@ export class PetFeederCard extends Base {
     const valid = d.draft && validateScheduleDraft(d.draft.entries);
     d.section.querySelector('[data-message]').textContent = d.error || (!d.draft ? 'Schedule unavailable until a device report is observed.' : conflict ? 'Schedule changed on the device. Cancel and reopen your edits.' : valid?.error || '');
     const save = d.section.querySelector('[data-save]');
-    if (save) save.disabled = this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || conflict || !valid?.valid || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState);
+    if (save) save.disabled = Boolean(this._entryCancelLatch()) || this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || conflict || !valid?.valid || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState);
     const status = d.section.querySelector('[data-write-status]');
-    status.textContent = view.writeState === 'pending' ? 'Submitted; not yet verified.' : view.writeState === 'verified' ? 'Device status observed.' : view.writeState === 'uncertain' ? 'Outcome uncertain.' : view.writeState === 'blocked' ? 'Writes blocked.' : '';
+    status.textContent = view.writeState === 'pending' ? 'Submitted; not yet verified.' : view.writeState === 'verified' ? (this._entryCancelLatch() ? '' : 'Device status observed.') : view.writeState === 'uncertain' ? 'Outcome uncertain.' : view.writeState === 'blocked' ? 'Writes blocked.' : '';
     if (view.storageFault || view.integrityFault) status.textContent += ' Storage or integrity fault; recovery cannot repair it.';
     const history = d.section.querySelector('[data-history]');
     const historySignature = JSON.stringify([view.history.events, this._hass.config?.time_zone]);
@@ -1689,9 +1771,16 @@ export class PetFeederCard extends Base {
         this._updateFreshfeedStatus();
         if (button.disabled || button.hidden || this._freshfeedRecovering || this._config.mode === 'raw' || !globalThis.confirm('Check the device and clear local uncertainty after fresh reports?')) return;
         const current = freshfeedView(this._config, this._hass);
-        this._freshfeedRecovering = true; d.error = null; this._updateFreshfeedStatus();
-        try { await this._hass.callService('petsafe_freshfeed', 'recover', { entry_id: this._config.freshfeed.entry_id, operation_id: current.operationId, session_id: current.sessionId, confirmed: true }); }
-        catch { d.error = 'Recovery request rejected.'; }
+        this._freshfeedRecovering = true; d.error = null;
+        const latch = this._entryCancelLatch();
+        if (latch) latch.recovery = null;
+        this._updateFreshfeedStatus();
+        try {
+          await this._hass.callService('petsafe_freshfeed', 'recover', { entry_id: this._config.freshfeed.entry_id, operation_id: current.operationId, session_id: current.sessionId, confirmed: true });
+          if (latch && this._entryCancelLatch() === latch && current.sessionId && current.operationId && (current.sessionId !== latch.sessionId || current.operationId !== latch.operationId) && current.operation === 'cancel') {
+            latch.recovery = { operationId: current.operationId, sessionId: current.sessionId };
+          }
+        } catch { d.error = 'Recovery request rejected.'; }
         finally { this._freshfeedRecovering = false; this._updateFreshfeedStatus(); }
       });
       recovery.appendChild(button);
@@ -1708,6 +1797,7 @@ export class PetFeederCard extends Base {
     const d = this._dialog;
     this._dialog = null;
     this._dialogRows = [];
+    this._disarmCancel();
     if (!d) return;
     d.el.remove();
     if (d.freshfeed) this._render();

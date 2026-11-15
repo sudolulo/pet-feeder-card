@@ -56,3 +56,10 @@ test('parity rejects raw bypasses, cancel/now and placeholder while legacy and r
   assert.doesNotThrow(()=>validateConfig({model:'aqara_c1',entities:{},actions:[{action:'button.press',target:{entity_id:'button.raw'}}]}));
   const {card,calls}=setup(); card._config.mode='raw'; card._onAction(0); card._onAction(0); assert.equal(calls.length,0);
 });
+
+test("cancel projection requires explicit eligibility and valid reported status",()=>{
+  const {card}=setup(); card._hass.states.q={state:"pending",last_updated:"2026-11-15T00:00:00Z",attributes:{minutes:0}};
+  let view=freshfeedView(card._config,card._hass); assert.equal(view.canCancel,false); assert.equal(view.quickFeed.minutes,0); assert.equal(view.quickFeed.haUpdated,"2026-11-15T00:00:00Z");
+  card._hass.states.w.attributes.can_cancel=true; card._hass.states.q.attributes.minutes=255; view=freshfeedView(card._config,card._hass); assert.equal(view.canCancel,true); assert.equal(view.quickFeed.minutes,255);
+  card._hass.states.q.state="unknown"; view=freshfeedView(card._config,card._hass); assert.equal(view.quickFeed.minutes,null);
+});
