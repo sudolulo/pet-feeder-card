@@ -9,6 +9,6 @@
     "shoot": "node harness/shoot.mjs"
   },
   "devDependencies": {
-    "playwright": "1.63.0-alpha-2026-08-05"
+    "playwright": "1.65.1"
   }
 }
