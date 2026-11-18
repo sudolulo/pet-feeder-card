@@ -1,7 +1,7 @@
 /*
  * pet-feeder-card -- Home Assistant Lovelace custom card for pet feeders.
  */
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView } from './freshfeed-model.js?v=1';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.0';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -576,12 +576,13 @@ export function buildModel(config, hass, now = new Date()) {
     const time = at ? `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}` : null;
     let text = 'Unknown';
     if (tray.known) text = tray.left === 0 ? 'Refill needed' : tray.left === 1 ? 'Last meal' : `${tray.left} of ${config.meal_slots} left`;
+    if (config.model === 'freshfeed' && tray.known) text = tray.left === 0 ? 'Estimated empty tray' : tray.left === 1 ? 'Estimated last meal' : `Estimated ${tray.left} of ${config.meal_slots} left`;
     meals = {
       entity: ent[mealsKey],
       slots: tray.slots.map((s) => ({ ...s, time: s.next ? time : null })),
       left: tray.left,
       total: config.meal_slots,
-      label: 'Meals',
+      label: config.model === 'freshfeed' ? 'Estimated meals' : 'Meals',
       text,
       color: mealsColor(tray.left),
     };
@@ -997,7 +998,7 @@ export function renderArt(art) {
 // Custom element
 // ---------------------------------------------------------------------------
 
-const CARD_VERSION = '0.2.0';
+const CARD_VERSION = '0.4.0';
 const CONFIRM_MS = 4000;
 const TICK_MS = 60000; // refresh relative times once a minute
 
@@ -1139,6 +1140,9 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
   padding: 14px 24px 16px; border-top: 1px solid var(--divider-color, rgba(0,0,0,.12));
 }
 .footer.single { justify-content: flex-start; }
+.command-message {
+  margin: 0 24px 16px; color: var(--error-color, #db4437); font-size: 14px; line-height: 1.4;
+}
 .item {
   display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; border-radius: 8px;
   color: var(--secondary-text-color, #727272); font-size: 15px;
@@ -1146,21 +1150,38 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
 .item ha-icon { --mdc-icon-size: 24px; color: var(--state-icon-color, #44739e); flex: none; }
 .item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .overlay {
-  position: absolute; inset: 0; z-index: 5; display: flex; align-items: flex-start; justify-content: center;
-  background: rgba(0,0,0,.32); padding: 32px 16px; box-sizing: border-box;
+  --pf-overlay-pad: 32px;
+  position: fixed; inset: 0; z-index: 5; display: flex; align-items: flex-start; justify-content: center;
+  background: rgba(0,0,0,.32); padding: var(--pf-overlay-pad) 16px; box-sizing: border-box;
 }
 .panel {
-  width: 100%; max-width: 420px; background: var(--card-background-color, #fff); border-radius: 16px;
-  box-shadow: 0 8px 28px rgba(0,0,0,.3); padding: 8px 16px 16px; box-sizing: border-box;
-  max-height: 100%; overflow-y: auto;
+  width: 100%; max-width: 420px; min-width: 0; background: var(--card-background-color, #fff); border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.3); padding: 0 16px 16px; box-sizing: border-box;
+  /* Stay inside the viewport; the panel body scrolls under a sticky head. */
+  max-height: min(100%, calc(100vh - 2 * var(--pf-overlay-pad)));
+  max-height: min(100%, calc(100dvh - 2 * var(--pf-overlay-pad)));
+  overflow-y: auto; overflow-x: auto; overscroll-behavior: contain; overflow-wrap: anywhere;
 }
+.panel:focus { outline: none; }
 .panel-head {
-  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 0 8px; background: var(--card-background-color, #fff);
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 0; background: var(--card-background-color, #fff);
 }
-.panel-title { font-size: 18px; font-weight: 500; color: var(--primary-text-color, #212121); }
-.panel .round { width: 40px; height: 40px; border-color: transparent; }
-.rows > * { display: block; margin: 4px 0; }
+.panel-title { min-width: 0; font-size: 18px; font-weight: 500; color: var(--primary-text-color, #212121); }
+.panel .round { flex: none; width: 44px; height: 44px; border-color: transparent; }
+.rows > * { display: block; margin: 4px 0; min-width: 0; }
+.panel fieldset.meal {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px;
+  min-width: 0; margin: 8px 0; padding: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,.12)); border-radius: 8px;
+}
+.panel fieldset.meal > label, .panel fieldset.meal > .meal-delete { grid-column: 1 / -1; min-height: 44px; display: flex; align-items: center; gap: 8px; }
+.panel fieldset.meal > .day { min-width: 44px; min-height: 44px; padding: 0; }
+.panel [data-actions] { display: flex; flex-wrap: wrap; gap: 8px; }
+.panel [data-actions] > button, .panel section > button { min-height: 44px; }
+@media (max-width: 400px), (max-height: 480px) {
+  .overlay { --pf-overlay-pad: 8px; padding: var(--pf-overlay-pad); }
+  .panel { padding: 0 10px 10px; border-radius: 12px; }
+}
 
 /* Raw mode intentionally shows only literal Home Assistant data. */
 .raw-card .header { align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; }
@@ -1212,7 +1233,72 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
 
 const Base = globalThis.HTMLElement ?? class {};
 
+// --- Dialog focus helpers (composed/shadow DOM aware, no external library) -----
+
+/** True when `node` is `outer` or inside it, crossing open shadow-root boundaries. */
+function composedContains(outer, node) {
+  for (let n = node; n; n = n.parentNode || n.host) if (n === outer) return true;
+  return false;
+}
+
+/** Follow activeElement through open shadow roots from `start` (a Document or ShadowRoot). */
+function deepActiveFrom(start) {
+  let active = start?.activeElement ?? null;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
+}
+
+const FOCUSABLE = 'a[href],area[href],button,input:not([type=hidden]),select,textarea,iframe,summary,[contenteditable=""],[contenteditable=true]';
+
+/** Children in the flat (rendered) tree: a host's shadow root, a slot's assigned elements. */
+function flatChildren(node) {
+  if (node.shadowRoot) return [...node.shadowRoot.children];
+  if (node.localName === 'slot') {
+    const assigned = node.assignedElements({ flatten: true });
+    return assigned.length ? assigned : [...node.children];
+  }
+  return [...node.children];
+}
+
+/** Enabled, rendered, non-inert keyboard-focusable elements under `root`, in flat-tree order. */
+function focusableWithin(root) {
+  const out = [];
+  const visit = (node) => {
+    for (const el of flatChildren(node)) {
+      if (el.nodeType !== 1 || el.inert || el.hidden) continue;
+      if (getComputedStyle(el).display === 'none') continue;
+      const tabbable = el.hasAttribute('tabindex') ? el.tabIndex >= 0 : el.matches(FOCUSABLE);
+      const rendered = typeof el.checkVisibility === 'function'
+        ? el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })
+        : el.getClientRects().length > 0;
+      if (tabbable && rendered && !el.matches(':disabled')) out.push(el);
+      visit(el);
+    }
+  };
+  visit(root);
+  return out;
+}
+
+/** A nested dialog (for example HA more-info rendered by a row) owns its own keys. */
+function isNestedDialog(el) {
+  if (el?.nodeType !== 1) return false;
+  const role = el.getAttribute('role');
+  // Open row popups (select menus, listboxes) own Escape and arrow keys too.
+  return ['dialog', 'alertdialog', 'listbox', 'menu'].includes(role) || el.getAttribute('aria-modal') === 'true' ||
+    ['dialog', 'ha-dialog', 'ha-more-info-dialog', 'mwc-menu', 'ha-menu', 'ha-md-menu'].includes(el.localName);
+}
+
+let dialogTitleSeq = 0;
+// The card whose dialog most recently became modal; only it answers keys that
+// arrive while focus has dropped to the page body.
+let modalOwner = null;
+
 export class PetFeederCard extends Base {
+  static async getConfigElement() {
+    await import('./pet-feeder-card-editor.js?v=0.4.0');
+    return document.createElement('pet-feeder-card-editor');
+  }
+
   constructor() {
     super();
     this._config = null;
@@ -1221,6 +1307,7 @@ export class PetFeederCard extends Base {
     this._armed = -1; // index of the action awaiting confirmation
     this._armTimer = null;
     this._tick = null;
+    this._now = () => new Date(); // injectable clock for the near-meal advisory
     this._disconnectTimer = null;
     this._reparentFocus = null;
     this._dialogRows = [];
@@ -1231,6 +1318,9 @@ export class PetFeederCard extends Base {
     this._dialog = null;
     this._dialogOpening = null;
     this._dialogGen = 0;
+    // Modal state of the attached dialog: opener, inert bookkeeping, listeners.
+    this._activeDialog = null;
+    this._focusTracked = new WeakSet();
     this._root = null;
   }
 
@@ -1274,7 +1364,11 @@ export class PetFeederCard extends Base {
     const target = this._reparentFocus;
     this._reparentFocus = null;
     const active = this.ownerDocument?.activeElement;
-    if (target?.isConnected && this.shadowRoot?.contains(target) && (!active || active === this.ownerDocument.body)) target.focus();
+    if (target?.isConnected && this.shadowRoot && composedContains(this.shadowRoot, target) && (!active || active === this.ownerDocument.body)) target.focus();
+    // A dialog that finished opening while the card was detached has not
+    // received its initial focus yet.
+    const a = this._activeDialog;
+    if (a && !target && (!active || active === this.ownerDocument.body)) (focusableWithin(a.panel)[0] || a.panel).focus();
   }
 
   disconnectedCallback() {
@@ -1287,7 +1381,7 @@ export class PetFeederCard extends Base {
       this._disconnectTimer = null;
       if (!this.isConnected) {
         this._reparentFocus = null;
-        this._closeControls();
+        this._closeControls({ restoreFocus: false });
         this._disarm(false);
       }
     }, 0);
@@ -1321,11 +1415,11 @@ export class PetFeederCard extends Base {
     if (this._root) return;
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
     this.shadowRoot.innerHTML = `<style>${STYLES}</style><ha-card></ha-card>`;
-    this.shadowRoot.addEventListener('focusin', (event) => { this._reparentFocus = event.target; });
+    this.shadowRoot.addEventListener('focusin', (event) => this._trackFocus(event));
     this.shadowRoot.addEventListener('focusout', (event) => {
       if (event.relatedTarget) this._reparentFocus = null;
       else queueMicrotask(() => {
-        if (this.isConnected && this.shadowRoot.activeElement !== this._reparentFocus) this._reparentFocus = null;
+        if (this.isConnected && deepActiveFrom(this.shadowRoot) !== this._reparentFocus) this._reparentFocus = null;
       });
     });
     this._root = this.shadowRoot.querySelector('ha-card');
@@ -1405,7 +1499,7 @@ export class PetFeederCard extends Base {
           .join('')}</div>`
       : '';
 
-    this._root.innerHTML = `
+    this._setContent(`
       <div class="header">
         <div class="name">${esc(m.name)}</div>
         <div class="status"${more(m.status.entity)} title="${esc(m.status.label)}">
@@ -1420,10 +1514,42 @@ export class PetFeederCard extends Base {
         ${m.chip ? `<div class="chip"${more(m.chip.entity)} title="${esc(m.chip.key.replace(/_/g, ' '))}">${icon(m.chip.icon)}<span>${esc(m.chip.value)}</span></div>` : ''}
       </div>
       ${tray || gauge ? `<div class="gauges">${tray || gauge}</div>` : ''}
-      ${footer}`;
-    if (this._dialog) this._root.appendChild(this._dialog.el); // keep the open overlay after re-render
+      ${footer}`);
+    this._renderCommandMessage();
+    if (this._dialog) {
+      // The open overlay stays attached (moving it would drop focus inside it);
+      // only the freshly rendered card content behind it becomes inert.
+      if (this._dialog.el.parentNode !== this._root) this._root.appendChild(this._dialog.el);
+      this._applyInert();
+    }
     if (focusedAction != null) {
       this._root.querySelector(`.actions .round[data-action="${focusedAction}"]`)?.focus();
+    }
+  }
+
+  /** Replace the card content, keeping an open overlay (and the focus inside it) attached. */
+  _setContent(html) {
+    const overlay = this._dialog?.el;
+    if (!overlay || overlay.parentNode !== this._root) {
+      this._root.innerHTML = html;
+      return;
+    }
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    for (const node of [...this._root.childNodes]) if (node !== overlay) node.remove();
+    this._root.insertBefore(template.content, overlay);
+  }
+
+  /** Remember the deepest focused node, also for moves inside nested open shadow roots. */
+  _trackFocus(event) {
+    const path = event.composedPath();
+    this._reparentFocus = path[0];
+    for (const node of path) {
+      if (node === this.shadowRoot) break;
+      if (node?.nodeType === 11 && node.host && !this._focusTracked.has(node)) {
+        this._focusTracked.add(node);
+        node.addEventListener('focusin', (inner) => this._trackFocus(inner));
+      }
     }
   }
 
@@ -1480,8 +1606,9 @@ export class PetFeederCard extends Base {
     this._render();
     if (this._config.freshfeed) {
       this._freshfeedCommandPending = true;
+      this._freshfeedCommandError = null;
       this._render();
-      Promise.resolve().then(() => this._hass.callService('petsafe_freshfeed', 'command', { entry_id: this._config.freshfeed.entry_id, operation: a.data.operation, confirmed: true })).catch(err => console.error('pet-feeder-card: command rejected', err)).finally(() => { this._freshfeedCommandPending = false; this._render(); });
+      Promise.resolve().then(() => this._hass.callService('petsafe_freshfeed', 'command', { entry_id: this._config.freshfeed.entry_id, operation: a.data.operation, confirmed: true })).catch(err => { this._freshfeedCommandError = freshfeedErrorText(err, 'command'); }).finally(() => { this._freshfeedCommandPending = false; this._render(); });
       return;
     }
     const [domain, service] = a.action.split('.');
@@ -1493,6 +1620,26 @@ export class PetFeederCard extends Base {
     Promise.resolve(this._hass.callService(domain, service, a.data || {}, a.target)).catch((err) => {
       console.error(`pet-feeder-card: ${a.action} failed`, err);
     });
+  }
+
+  // FreshFeed-only command failure live region. The element is created once and
+  // re-attached after each innerHTML render; its text is written only after it
+  // is attached and only when it changes, so assistive tech sees one update.
+  _renderCommandMessage() {
+    const text = (this._config.freshfeed && this._freshfeedCommandError) || '';
+    const el = this._commandMessageEl;
+    if (!text) {
+      if (el) el.textContent = '';
+      return;
+    }
+    const status = el || (this._commandMessageEl = document.createElement('p'));
+    if (!el) {
+      status.className = 'command-message';
+      status.setAttribute('role', 'status');
+      status.setAttribute('data-command-message', '');
+    }
+    this._root.appendChild(status);
+    if (status.textContent !== text) status.textContent = text;
   }
 
   _disarm(render) {
@@ -1512,22 +1659,26 @@ export class PetFeederCard extends Base {
     }
     if (this._dialogOpening) return this._dialogOpening; // still building
     const gen = ++this._dialogGen;
-    const opening = this._buildControls(gen).finally(() => {
+    // Capture the real opener now: rows load asynchronously and focus may move.
+    const active = deepActiveFrom(this.ownerDocument);
+    const opener = active && active !== this.ownerDocument?.body ? active : null;
+    const opening = this._buildControls(gen, opener).finally(() => {
       if (this._dialogOpening === opening) this._dialogOpening = null;
     });
     this._dialogOpening = opening;
     return opening;
   }
 
-  async _buildControls(gen) {
+  async _buildControls(gen, opener = null) {
     const c = this._config;
     const rows = await this._createRows(c.controls);
     if (gen !== this._dialogGen) return; // closed (setConfig/disconnect) while loading
     this._dialogRows = rows;
     const title = `${c.name} controls`;
+    const titleId = `pf-dialog-title-${++dialogTitleSeq}`;
     const ov = document.createElement('div');
     ov.className = 'overlay';
-    ov.innerHTML = `<div class="panel" role="dialog" aria-label="${esc(title)}"><div class="panel-head"><span class="panel-title">${esc(title)}</span>
+    ov.innerHTML = `<div class="panel" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><div class="panel-head"><span class="panel-title" id="${titleId}">${esc(title)}</span>
       <button class="round" data-close title="Close" aria-label="Close"><ha-icon icon="mdi:close"></ha-icon></button></div><div class="rows"></div></div>`;
     const box = ov.querySelector('.rows');
     rows.forEach((r) => box.appendChild(r));
@@ -1537,6 +1688,108 @@ export class PetFeederCard extends Base {
     this._dialog = { el: ov };
     if (c.freshfeed) this._buildFreshfeed(box);
     this._root.appendChild(ov);
+    this._activateDialog(ov, opener);
+  }
+
+  /** Make the attached overlay modal: inert card content, key handling, initial focus. */
+  _activateDialog(overlay, opener) {
+    this._deactivateDialog({ restoreFocus: false });
+    const panel = overlay.querySelector('[role=dialog]');
+    const doc = overlay.ownerDocument;
+    const a = { overlay, panel, opener, doc, inert: new Map(), tabCheck: null };
+    a.onKeydown = (event) => this._onDialogKeydown(event);
+    // A focused control that is removed, hidden or disabled (Delete, Add meal,
+    // Save while saving) drops focus to the body: return it to the dialog, and
+    // keep Escape/Tab working while it is there.
+    a.onFocusOut = (event) => { if (!event.relatedTarget) queueMicrotask(() => this._recoverDialogFocus(a)); };
+    a.onDocumentKeydown = (event) => {
+      if (modalOwner !== this || this._activeDialog !== a || !overlay.isConnected) return;
+      if (doc.activeElement && doc.activeElement !== doc.body) return;
+      this._onDialogKeydown(event);
+    };
+    overlay.addEventListener('keydown', a.onKeydown);
+    overlay.addEventListener('focusout', a.onFocusOut);
+    doc.addEventListener('keydown', a.onDocumentKeydown);
+    this._activeDialog = a;
+    modalOwner = this;
+    this._applyInert();
+    if (overlay.isConnected) (focusableWithin(panel)[0] || panel).focus();
+  }
+
+  _recoverDialogFocus(a) {
+    if (this._activeDialog !== a || !a.overlay.isConnected) return;
+    const active = deepActiveFrom(a.doc);
+    if (!active || active === a.doc.body) a.panel.focus({ preventScroll: true });
+  }
+
+  /** Inert every card child except the overlay, remembering each element's previous value. */
+  _applyInert() {
+    const a = this._activeDialog;
+    if (!a || !this._root) return;
+    // Children replaced by a re-render need no restore; drop them (not merely
+    // disconnected ones: a transiently re-parented card is disconnected too).
+    for (const el of [...a.inert.keys()]) if (el.parentNode !== this._root) a.inert.delete(el);
+    for (const child of this._root.children) {
+      if (child === a.overlay || a.inert.has(child)) continue;
+      a.inert.set(child, child.inert);
+      child.inert = true;
+    }
+  }
+
+  /** Undo _activateDialog exactly once; optionally return focus to the opener. */
+  _deactivateDialog({ restoreFocus = true } = {}) {
+    const a = this._activeDialog;
+    if (!a) return;
+    this._activeDialog = null;
+    if (modalOwner === this) modalOwner = null;
+    clearTimeout(a.tabCheck);
+    a.overlay.removeEventListener('keydown', a.onKeydown);
+    a.overlay.removeEventListener('focusout', a.onFocusOut);
+    a.doc.removeEventListener('keydown', a.onDocumentKeydown);
+    for (const [el, inert] of a.inert) el.inert = inert;
+    if (!restoreFocus || !this.isConnected) return;
+    // Prefer the connected opener; fall back to the current menu button when the
+    // opener was re-rendered away or cannot take focus.
+    for (const target of [a.opener?.isConnected ? a.opener : null, this._root?.querySelector('.round.menu')]) {
+      if (!target?.focus) continue;
+      target.focus();
+      if (deepActiveFrom(a.doc) === target) return;
+    }
+  }
+
+  _onDialogKeydown(event) {
+    const a = this._activeDialog;
+    if (!a || event.defaultPrevented) return;
+    const path = event.composedPath();
+    const end = path.indexOf(a.panel);
+    // Keys from a nested dialog (HA more-info inside a row) belong to that dialog.
+    if (path.slice(0, end < 0 ? path.length : end).some(isNestedDialog)) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this._closeControls();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const items = focusableWithin(a.panel);
+    if (!items.length) {
+      event.preventDefault();
+      a.panel.focus();
+      return;
+    }
+    const at = items.indexOf(path[0]);
+    if (event.shiftKey ? at <= 0 : at === -1 || at === items.length - 1) {
+      event.preventDefault();
+      (event.shiftKey ? items[items.length - 1] : items[0]).focus();
+      return;
+    }
+    // Let the browser move between inner controls (time inputs have sub-fields),
+    // then pull focus back if it escaped the dialog anyway.
+    clearTimeout(a.tabCheck);
+    a.tabCheck = setTimeout(() => {
+      if (this._activeDialog !== a || !a.overlay.isConnected) return;
+      if (!composedContains(a.overlay, deepActiveFrom(this.ownerDocument))) (event.shiftKey ? items[items.length - 1] : items[0]).focus();
+    }, 0);
   }
 
   _entryCancelLatch() {
@@ -1559,7 +1812,7 @@ export class PetFeederCard extends Base {
 
   _buildFreshfeed(box) {
     const section = document.createElement('section');
-    section.innerHTML = '<h3>Quick feed status</h3><p data-quick-status></p><p data-quick-time></p><button type="button" data-cancel-countdown>Cancel countdown</button><p data-cancel-message role="status"></p><h3>Schedule</h3><p data-freshness></p><p data-message role="status"></p><div data-editor></div><div data-actions></div><div data-write-status></div><div data-recovery></div><div data-history></div>';
+    section.innerHTML = '<h3>Quick feed status</h3><p data-quick-status></p><p data-quick-time></p><button type="button" data-cancel-countdown>Cancel countdown</button><p data-cancel-message role="status"></p><p class="command-message" data-command-status role="status"></p><h3>Schedule</h3><p data-freshness></p><p data-message role="status"></p><p data-lead-time-warning role="status" aria-live="polite"></p><div data-editor></div><div data-actions></div><div data-write-status></div><div data-recovery></div><div data-history></div>';
     box.appendChild(section);
     this._dialog.freshfeed = { section, draft: createScheduleDraft(freshfeedView(this._config, this._hass).schedule), error: null };
     section.querySelector('[data-cancel-countdown]').addEventListener('click', () => this._onCancelCountdown());
@@ -1623,6 +1876,7 @@ export class PetFeederCard extends Base {
       const days = [['Sun', 0], ['Mon', 6], ['Tue', 5], ['Wed', 4], ['Thu', 3], ['Fri', 2], ['Sat', 1]];
       d.draft.entries.forEach((row, index) => {
         const field = document.createElement('fieldset');
+        field.className = 'meal';
         const legend = document.createElement('legend');
         legend.textContent = `Meal ${index + 1}`;
         field.appendChild(legend);
@@ -1642,6 +1896,7 @@ export class PetFeederCard extends Base {
         for (const [day, bit] of days) {
           const button = document.createElement('button');
           button.type = 'button';
+          button.className = 'day';
           button.textContent = day;
           button.setAttribute('aria-label', `${day} meal ${index + 1}`);
           button.setAttribute('aria-pressed', String(Boolean(row.weekmask & (1 << bit))));
@@ -1662,7 +1917,7 @@ export class PetFeederCard extends Base {
           field.appendChild(wrap);
         }
         const remove = document.createElement('button');
-        remove.type = 'button'; remove.textContent = 'Delete';
+        remove.type = 'button'; remove.textContent = 'Delete'; remove.className = 'meal-delete';
         remove.setAttribute('aria-label', `Delete meal ${index + 1}`);
         remove.addEventListener('click', () => { d.draft.entries.splice(index, 1); this._renderScheduleEditor(); });
         field.appendChild(remove);
@@ -1684,8 +1939,8 @@ export class PetFeederCard extends Base {
         this._freshfeedSaving = true; d.error = null; this._updateFreshfeedStatus();
         try {
           await this._hass.callService('petsafe_freshfeed', 'save_schedule', scheduleSaveData(this._config.freshfeed.entry_id, d.draft));
-        } catch {
-          d.error = 'Schedule save rejected. Your edits were retained.';
+        } catch (error) {
+          d.error = freshfeedErrorText(error, 'save');
         } finally { this._freshfeedSaving = false; this._updateFreshfeedStatus(); }
       });
       actions.appendChild(save);
@@ -1717,36 +1972,59 @@ export class PetFeederCard extends Base {
     if (!eligible || (this._cancelArmed && this._cancelArmSignature !== this._cancelSignature(view))) this._disarmCancel();
     const quick = view.quickFeed;
     d.section.querySelector('[data-quick-status]').textContent = quick.status === 'pending' ? (quick.minutes === null ? 'Pending — minutes unknown' : quick.minutes === 0 ? 'Pending — device reports 0 minutes; waiting for status' : `Pending — device reports ${quick.minutes} minutes remaining`) : quick.status ? quick.status[0].toUpperCase() + quick.status.slice(1) : 'Unknown';
-    d.section.querySelector('[data-quick-time]').textContent = quick.haUpdated ? `HA state updated ${quick.haUpdated}` : '';
+    const language = this._hass.locale?.language || this._hass.language;
+    const zone = this._hass.config?.time_zone;
+    d.section.querySelector('[data-quick-time]').textContent = quick.haUpdated ? `HA state updated ${formatFreshfeedTimestamp(quick.haUpdated, language, zone)}` : '';
     const cancel = d.section.querySelector('[data-cancel-countdown]');
     cancel.hidden = quick.status !== 'pending'; cancel.disabled = !eligible;
     cancel.textContent = this._cancelArmed ? 'Confirm cancel countdown' : 'Cancel countdown';
+    // Card-level command rejections arrive asynchronously; while this dialog is
+    // open the card body is not re-rendered, so mirror them in the dialog.
+    const commandStatus = d.section.querySelector('[data-command-status]');
+    if (commandStatus) {
+      const commandText = this._freshfeedCommandError || '';
+      if (commandStatus.textContent !== commandText) commandStatus.textContent = commandText;
+    }
     d.section.querySelector('[data-cancel-message]').textContent = this._entryCancelLatch()?.outcome || this._cancelOutcome?.text || (!eligible ? view.cancelReason || '' : '');
     if (!d.draft && view.draftAvailable) {
       d.draft = createScheduleDraft(view.schedule);
       this._renderScheduleEditor();
       return;
     }
-    d.section.querySelector('[data-freshness]').textContent = `${view.freshnessLabel}${view.lastSeen ? ` — last seen ${view.lastSeen}` : ''}`;
+    d.section.querySelector('[data-freshness]').textContent = `${view.freshnessLabel}${view.lastSeen ? ` — last seen ${formatFreshfeedTimestamp(view.lastSeen, language, zone)}` : ''}`;
     const conflict = Boolean(d.draft && view.schedule.revision !== d.draft.baseRevision);
     const valid = d.draft && validateScheduleDraft(d.draft.entries);
     d.section.querySelector('[data-message]').textContent = d.error || (!d.draft ? 'Schedule unavailable until a device report is observed.' : conflict ? 'Schedule changed on the device. Cancel and reopen your edits.' : valid?.error || '');
+    // Advisory only: evaluated for the device schedule and the draft, never a save gate.
+    const leadWarning = d.section.querySelector('[data-lead-time-warning]');
+    if (leadWarning) {
+      let advisory = null;
+      if (d.draft) {
+        const now = this._now();
+        for (const candidate of [scheduleLeadTimeWarning(view.schedule.entries, now, zone), scheduleLeadTimeWarning(d.draft.entries, now, zone)]) {
+          if (!candidate) continue;
+          if (!advisory || (advisory.minutes === null && candidate.minutes !== null) || (candidate.minutes !== null && candidate.minutes < advisory.minutes)) advisory = candidate;
+        }
+      }
+      const text = advisory?.text || '';
+      if (leadWarning.textContent !== text) leadWarning.textContent = text;
+    }
     const save = d.section.querySelector('[data-save]');
     if (save) save.disabled = Boolean(this._entryCancelLatch()) || this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || conflict || !valid?.valid || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState);
     const status = d.section.querySelector('[data-write-status]');
     status.textContent = view.writeState === 'pending' ? 'Submitted; not yet verified.' : view.writeState === 'verified' ? (this._entryCancelLatch() ? '' : 'Device status observed.') : view.writeState === 'uncertain' ? 'Outcome uncertain.' : view.writeState === 'blocked' ? 'Writes blocked.' : '';
     if (view.storageFault || view.integrityFault) status.textContent += ' Storage or integrity fault; recovery cannot repair it.';
     const history = d.section.querySelector('[data-history]');
-    const historySignature = JSON.stringify([view.history.events, this._hass.config?.time_zone]);
+    const historySignature = JSON.stringify([view.history.events, language, zone]);
     if (d.historySignature !== historySignature) {
       d.historySignature = historySignature;
       history.replaceChildren();
       const heading = document.createElement('h3'); heading.textContent = 'HA-observed history'; history.appendChild(heading);
       if (!view.history.events.length) { const empty = document.createElement('p'); empty.textContent = 'No HA-observed events yet.'; history.appendChild(empty); }
       for (const event of view.history.events) {
-        const row = document.createElement('p'); const date = typeof event.at === 'string' && event.at.trim() ? new Date(event.at) : new Date(NaN);
+        const row = document.createElement('p');
         const localSource = ['skipped_empty', 'skipped_fault'].includes(event.kind) ? 'DP14-derived local event' : ['dispensed', 'refilled'].includes(event.kind) ? 'DP145-derived local event' : 'local event; source unknown';
-        row.textContent = `${Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { timeZone: this._hass.config?.time_zone, timeZoneName: 'short' }) : 'Unknown time'} — ${event.kind}${event.source_dp == null ? ` (HA-observed ${localSource})` : ` (DP${event.source_dp})`}${event.compartment == null ? '' : ` — compartment ${event.compartment}`}${event.report_value == null ? '' : ` — report value ${event.report_value}`}`;
+        row.textContent = `${formatFreshfeedTimestamp(event.at, language, zone)} — ${feedingEventLabel(event.kind)}${event.source_dp == null ? ` (HA-observed ${localSource})` : ` (DP${event.source_dp})`}${event.compartment == null ? '' : ` — compartment ${event.compartment}`}${event.report_value == null ? '' : ` — report value ${event.report_value}`}`;
         history.appendChild(row);
       }
       const note = document.createElement('p'); note.textContent = 'DP151 history is unsupported.'; history.appendChild(note);
@@ -1780,7 +2058,7 @@ export class PetFeederCard extends Base {
           if (latch && this._entryCancelLatch() === latch && current.sessionId && current.operationId && (current.sessionId !== latch.sessionId || current.operationId !== latch.operationId) && current.operation === 'cancel') {
             latch.recovery = { operationId: current.operationId, sessionId: current.sessionId };
           }
-        } catch { d.error = 'Recovery request rejected.'; }
+        } catch (error) { d.error = freshfeedErrorText(error, 'recover'); }
         finally { this._freshfeedRecovering = false; this._updateFreshfeedStatus(); }
       });
       recovery.appendChild(button);
@@ -1790,7 +2068,7 @@ export class PetFeederCard extends Base {
   }
 
   /** Close and remove the controls dialog, including one still being built. */
-  _closeControls() {
+  _closeControls({ restoreFocus = true } = {}) {
     this._reparentFocus = null;
     this._dialogGen++;
     this._dialogOpening = null;
@@ -1798,9 +2076,19 @@ export class PetFeederCard extends Base {
     this._dialog = null;
     this._dialogRows = [];
     this._disarmCancel();
-    if (!d) return;
+    if (!d) {
+      this._deactivateDialog({ restoreFocus: false });
+      return;
+    }
+    // Return focus only when it was in the dialog (or dropped to the page body,
+    // as after a backdrop click), never stealing it from elsewhere, such as an
+    // editor calling setConfig or an HA more-info dialog.
+    const doc = this.ownerDocument;
+    const active = doc ? deepActiveFrom(doc) : null;
+    const focusWasHere = !active || active === doc?.body || composedContains(d.el, active);
     d.el.remove();
     if (d.freshfeed) this._render();
+    this._deactivateDialog({ restoreFocus: restoreFocus && focusWasHere });
   }
 
   async _createRows(entities) {

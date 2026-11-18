@@ -1,5 +1,30 @@
 const copy = value => structuredClone(value);
 
+const eventLabels = { dispensed: 'Meal dispensed (observed)', refilled: 'Tray refilled (observed)', skipped_empty: 'Meal skipped: estimated empty tray', skipped_fault: 'Meal skipped: fault', meal_report: 'Meal report', all_meals_report: 'All meals report', interrupted: 'Feeding interrupted' };
+export function feedingEventLabel(kind) { return Object.hasOwn(eventLabels, kind) ? eventLabels[kind] : 'Unknown feeding event'; }
+
+const knownReasons = new Set('invalid_request confirmation_required invalid_operation admin_required unknown_entry source_unavailable recovery_rejected stopped storage_fault integrity_fault busy recovery_in_progress intent_uncertain source_incompatible schedule_unknown stale_schedule quick_feed_active defrost_active feeding_active status_unavailable cancel_not_pending empty_tray already_refilled controls_disabled source_not_ready schedule_conflict request_refused'.split(' '));
+export function freshfeedErrorText(error, action) {
+  const candidates = typeof error === 'string' ? [error] : [error?.translation_key, error?.reason, error?.code, error?.message];
+  const reason = candidates.find(value => typeof value === 'string' && knownReasons.has(value)) ?? 'request_refused';
+  let text = 'Check the feeder connection, controls and write status before trying again.';
+  if (reason === 'request_refused') text = 'The request could not be confirmed. Check device and write status before trying again.';
+  else if (reason === 'admin_required') text = 'Use an administrator account.';
+  else if (['stale_schedule', 'schedule_conflict'].includes(reason)) text = 'Reload the schedule before saving again.';
+  else if (['storage_fault', 'integrity_fault'].includes(reason)) text = 'Check storage and write status; do not delete retained intent.';
+  else if (['intent_uncertain', 'recovery_in_progress', 'recovery_rejected'].includes(reason)) text = 'Inspect the feeder and use the existing recovery controls.';
+  return text + (action === 'save' ? ' Your edits have been retained.' : '');
+}
+
+export function formatFreshfeedTimestamp(value, language, timeZone) {
+  if (typeof value !== 'string' || !value.trim()) return 'Unknown time';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Unknown time';
+  try { if (language) new Intl.DateTimeFormat(language); } catch { language = undefined; }
+  try { if (timeZone) new Intl.DateTimeFormat(undefined, { timeZone }); } catch { timeZone = undefined; }
+  return new Intl.DateTimeFormat(language || undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: timeZone || undefined }).format(date);
+}
+
 export function createScheduleDraft(view) {
   if (!['current', 'last_known'].includes(view?.source_state) || !Array.isArray(view?.entries) || typeof view.revision !== 'string') return null;
   return { entries: copy(view.entries), baseRevision: view.revision };
@@ -14,6 +39,64 @@ export function validateScheduleDraft(entries) {
     }
   }
   return { valid: true, error: null };
+}
+
+export const LEAD_TIME_WARNING = 'A meal is due within 5 minutes. The feeder may already be preparing it; changes may not affect that meal. Saving is still allowed.';
+export const LEAD_TIME_UNAVAILABLE = 'Meal timing is unavailable. The feeder may already be preparing a meal; saving is still allowed.';
+const LEAD_WINDOW_MS = 5 * 60000;
+
+// Wall-clock parts of an instant in an IANA zone, independent of the browser zone.
+function zoneParts(format, ms) {
+  const p = {};
+  for (const { type, value } of format.formatToParts(new Date(ms))) if (type !== 'literal') p[type] = Number(value);
+  return p;
+}
+
+// Every instant whose wall time in the zone is exactly y-m-d h:min: none in a DST gap, two in a fold.
+function wallInstants(format, y, m, d, h, min) {
+  const wall = Date.UTC(y, m - 1, d, h, min);
+  const offsetAt = ms => { const p = zoneParts(format, ms); return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - Math.floor(ms / 60000) * 60000; };
+  const candidates = new Set([wall - offsetAt(wall - 86400000), wall - offsetAt(wall), wall - offsetAt(wall + 86400000)]);
+  return [...candidates].filter(ms => { const p = zoneParts(format, ms); return p.year === y && p.month === m && p.day === d && p.hour === h && p.minute === min; });
+}
+
+/**
+ * Advisory only: the earliest enabled meal due 0..5 minutes (inclusive) after `now`
+ * in the HA zone, or a timing-unavailable notice. Never a save gate.
+ * Weekmask bits: Sun bit0, Sat bit1, Fri bit2, Thu bit3, Wed bit4, Tue bit5, Mon bit6.
+ */
+export function scheduleLeadTimeWarning(entries, now, timeZone) {
+  const unavailable = { minutes: null, text: LEAD_TIME_UNAVAILABLE };
+  try {
+    if (!Array.isArray(entries) || !(now instanceof Date) || !Number.isFinite(now.getTime()) || typeof timeZone !== 'string' || !timeZone) return unavailable;
+    const format = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
+    const bounded = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+    for (const row of entries) {
+      if (!row || typeof row !== 'object' || typeof row.enabled !== 'boolean') return unavailable;
+      if (row.enabled && (!bounded(row.weekmask, 0, 127) || !bounded(row.hour, 0, 23) || !bounded(row.minute, 0, 59))) return unavailable;
+    }
+    const nowMs = now.getTime();
+    const today = zoneParts(format, nowMs);
+    if (![today.year, today.month, today.day].every(Number.isInteger)) return unavailable;
+    let best = null;
+    // Yesterday..tomorrow covers a five-minute window across local midnight and DST shifts.
+    for (const offset of [-1, 0, 1]) {
+      const date = new Date(Date.UTC(today.year, today.month - 1, today.day + offset));
+      const y = date.getUTCFullYear(), m = date.getUTCMonth() + 1, d = date.getUTCDate(), weekday = date.getUTCDay();
+      const bit = weekday === 0 ? 0 : 7 - weekday;
+      for (const row of entries) {
+        if (!row.enabled || !(row.weekmask & (1 << bit))) continue;
+        for (const at of wallInstants(format, y, m, d, row.hour, row.minute)) {
+          const delta = at - nowMs;
+          // A meal in the current minute counts as due now (0 minutes).
+          if (delta > -60000 && delta <= LEAD_WINDOW_MS && (best === null || delta < best)) best = delta;
+        }
+      }
+    }
+    return best === null ? null : { minutes: Math.max(0, Math.ceil(best / 60000)), text: LEAD_TIME_WARNING };
+  } catch {
+    return unavailable;
+  }
 }
 
 export function scheduleSaveData(entryId, draft) {

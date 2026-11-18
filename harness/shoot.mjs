@@ -310,7 +310,7 @@ try {
   );
   check(JSON.stringify(r.trayNext) === '[3]' && r.trayNextCaption != null && r.trayNextCaption !== '', `next marker on tile 3 with a caption (got ${JSON.stringify(r.trayNext)}, caption ${r.trayNextCaption})`);
   check(r.trayTitles[0] === 'Meal 1 - eaten' && r.trayTitles[1] === 'Meal 2 is in the serving window' && r.trayTitles[3] === 'Meal 4 - full', `tile titles (got ${JSON.stringify(r.trayTitles)})`);
-  check(r.trayText === '4 of 6 left' && r.trayLabel === 'Meals', `tray header reads "Meals / 4 of 6 left" (got ${r.trayLabel} / ${r.trayText})`);
+  check(r.trayText === 'Estimated 4 of 6 left' && r.trayLabel === 'Estimated meals', `tray header reads "Estimated meals / Estimated 4 of 6 left" (got ${r.trayLabel} / ${r.trayText})`);
   check(r.trayReplacesFoodBar, 'meal tray replaces the food gauge bar');
   check(r.trayMoreInfo === 'input_number.freshfeed_demo_counter', `tapping the tray fires hass-more-info for the counter (got ${r.trayMoreInfo})`);
   check(
@@ -577,7 +577,7 @@ try {
       card.hass=makeHass(states);
       const preserved = card.shadowRoot.activeElement===time && card._dialog.freshfeed.draft.entries[0].hour===9 && button('Save').disabled;
       const lastSeen=card.shadowRoot.textContent.includes('last seen');
-      const historyRendered=card.shadowRoot.textContent.includes('HA-observed history') && card.shadowRoot.textContent.includes('dispensed (DP145)');
+      const historyRendered=card.shadowRoot.textContent.includes('HA-observed history') && card.shadowRoot.textContent.includes('Meal dispensed (observed) (DP145)');
       const overlay=card._dialog.el;
       const draft=card._dialog.freshfeed.draft;
       const draftValues=JSON.stringify(draft);

@@ -34,7 +34,7 @@ test('history refreshes local time when HA timezone changes but preserves rows o
     card.hass = hass;
     const originalRow = history.children[1];
     const date = new Date(event.at);
-    const formatted = zone => date.toLocaleString(undefined, { timeZone: zone, timeZoneName: 'short' });
+    const formatted = zone => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: zone }).format(date);
     assert.ok(originalRow.textContent.startsWith(formatted('UTC')));
     card.hass = { ...hass, states: { ...hass.states, other: { state: 'on', attributes: {} } } };
     assert.strictEqual(history.children[1], originalRow);
@@ -42,5 +42,9 @@ test('history refreshes local time when HA timezone changes but preserves rows o
     assert.notEqual(formatted('UTC'), formatted('America/New_York'));
     assert.ok(history.children[1].textContent.startsWith(formatted('America/New_York')), history.children[1].textContent);
     assert.notStrictEqual(history.children[1], originalRow);
+    const zonedRow = history.children[1];
+    card.hass = { ...hass, locale: { language: 'de-DE' }, config: { time_zone: 'America/New_York' } };
+    assert.notStrictEqual(history.children[1], zonedRow);
+    assert.ok(history.children[1].textContent.startsWith(new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/New_York' }).format(date)));
   } finally { globalThis.document = originalDocument; }
 });

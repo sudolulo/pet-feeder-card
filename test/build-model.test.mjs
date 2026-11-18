@@ -326,14 +326,14 @@ const COUNTER = 'input_number.freshfeed_demo_counter';
 const LEFT = 'sensor.freshfeed_meals_left';
 const NEXT = 'input_datetime.freshfeed_demo_next_meal';
 
-test('meals: counter of 2 delivered -> "4 of 6 left", green, next slot carries the next-meal time', () => {
+test('meals: counter of 2 delivered -> "Estimated 4 of 6 left", green, next slot carries the next-meal time', () => {
   const cfg = mealCfg({ counter: COUNTER, next_meal: NEXT });
   const m = buildModel(cfg, { states: { [COUNTER]: st('2.0'), [NEXT]: st('2026-10-20 18:00:00') } }, now);
   assert.equal(m.meals.entity, COUNTER);
-  assert.equal(m.meals.label, 'Meals');
+  assert.equal(m.meals.label, 'Estimated meals');
   assert.equal(m.meals.total, 6);
   assert.equal(m.meals.left, 4);
-  assert.equal(m.meals.text, '4 of 6 left');
+  assert.equal(m.meals.text, 'Estimated 4 of 6 left');
   assert.equal(m.meals.color, 'var(--success-color, #43a047)');
   assert.deepEqual(
     m.meals.slots.map((s) => [s.n, s.state, s.next, s.time]),
@@ -359,13 +359,13 @@ test('meals: time label is 24h HH:MM and absent when next_meal is not configured
 
 test('meals: text and colour by meals left', () => {
   const at = (delivered) => buildModel(mealCfg({ counter: COUNTER }), { states: { [COUNTER]: st(String(delivered)) } }, now).meals;
-  assert.equal(at(3).text, '3 of 6 left');
+  assert.equal(at(3).text, 'Estimated 3 of 6 left');
   assert.equal(at(3).color, 'var(--success-color, #43a047)');
-  assert.equal(at(4).text, '2 of 6 left');
+  assert.equal(at(4).text, 'Estimated 2 of 6 left');
   assert.equal(at(4).color, 'var(--warning-color, #ffa600)');
-  assert.equal(at(5).text, 'Last meal');
+  assert.equal(at(5).text, 'Estimated last meal');
   assert.equal(at(5).color, 'var(--warning-color, #ffa600)');
-  assert.equal(at(6).text, 'Refill needed');
+  assert.equal(at(6).text, 'Estimated empty tray');
   assert.equal(at(6).color, 'var(--error-color, #db4437)');
   assert.equal(at(6).left, 0);
 });
@@ -389,7 +389,7 @@ test('meals: meals_left alone drives the tray', () => {
   const m = buildModel(mealCfg({ meals_left: LEFT }), { states: { [LEFT]: st('1') } }, now).meals;
   assert.equal(m.entity, LEFT);
   assert.equal(m.left, 1);
-  assert.equal(m.text, 'Last meal');
+  assert.equal(m.text, 'Estimated last meal');
   assert.deepEqual(
     m.slots.map((s) => s.state),
     ['eaten', 'eaten', 'eaten', 'eaten', 'serving', 'full'],
@@ -416,7 +416,7 @@ test('meals: custom meal_slots count', () => {
   const m = buildModel(mealCfg({ counter: COUNTER }, { meal_slots: 3 }), { states: { [COUNTER]: st('3') } }, now).meals;
   assert.equal(m.total, 3);
   assert.equal(m.slots.length, 3);
-  assert.equal(m.text, 'Refill needed');
+  assert.equal(m.text, 'Estimated empty tray');
 });
 
 test('camera entity is exposed for the camera button', () => {

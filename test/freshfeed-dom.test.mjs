@@ -28,11 +28,12 @@ function setup(){
   globalThis.document={createElement:(tag)=>new Element(tag),createTextNode:(text)=>({textContent:text,children:[]})};
   const card=new PetFeederCard(); card._config=validateConfig(config()); card._render=()=>{};
   const section=new Element('section'); const editor=new Element();const actions=new Element();const recovery=new Element();const history=new Element();const freshness=new Element('p'),message=new Element('p'),writeStatus=new Element('p');
-  const quickStatus=new Element('p'), quickTime=new Element('p'), cancelButton=new Element('button'), cancelMessage=new Element('p');
-  section.querySelector=(s)=>({'[data-quick-status]':quickStatus,'[data-quick-time]':quickTime,'[data-cancel-countdown]':cancelButton,'[data-cancel-message]':cancelMessage,'[data-editor]':editor,'[data-actions]':actions,'[data-recovery]':recovery,'[data-history]':history,'[data-freshness]':freshness,'[data-message]':message,'[data-write-status]':writeStatus}[s]||actions.querySelector(s));
+  const quickStatus=new Element('p'), quickTime=new Element('p'), cancelButton=new Element('button'), cancelMessage=new Element('p'), leadWarning=new Element('p');
+  section.querySelector=(s)=>({'[data-quick-status]':quickStatus,'[data-quick-time]':quickTime,'[data-cancel-countdown]':cancelButton,'[data-cancel-message]':cancelMessage,'[data-editor]':editor,'[data-actions]':actions,'[data-recovery]':recovery,'[data-history]':history,'[data-freshness]':freshness,'[data-message]':message,'[data-write-status]':writeStatus,'[data-lead-time-warning]':leadWarning}[s]||actions.querySelector(s));
   card._dialog={freshfeed:{section,draft:null,error:null},el:new Element()};
   card._hass={config:{time_zone:'UTC'},states:{s:{state:'unknown',attributes:{source_state:'unknown',entries:null,revision:null}},w:{state:'idle',attributes:{can_feed:true,can_defrost:true,can_refilled:true,recovery_phase:'idle'}},q:{state:'idle',attributes:{status:'idle',minutes:null}},h:{state:'0',attributes:{events:[],basis:'ha_observed'}}},callService:async()=>{}};
-  return {card,section,editor,actions,recovery,history,freshness,message,writeStatus,quickStatus,quickTime,cancelButton,cancelMessage};
+  card._now=()=>new Date('2026-11-18T12:00:00Z');
+  return {leadWarning,card,section,editor,actions,recovery,history,freshness,message,writeStatus,quickStatus,quickTime,cancelButton,cancelMessage};
 }
 test.afterEach(()=>{globalThis.document=originalDocument;globalThis.confirm=originalConfirm;});
 
@@ -339,11 +340,113 @@ test('all weekday buttons map to their wire bits',async()=>{
   assert.equal(calls[0][2].entries[0].weekmask,64);
 });
 
+test('friendly history and localized quick and freshness times preserve provenance',()=>{
+  const {card,history,quickTime,freshness}=setup();
+  card._hass.language='en-US'; card._hass.states.q.last_updated='2026-01-01T00:00:00Z';
+  card._hass.states.s.attributes.observed_at='2026-01-01T00:00:00Z';
+  card._hass.states.h.attributes.events=[{at:'2026-01-01T00:00:00Z',kind:'dispensed',source_dp:145,report_value:3}];
+  card._updateFreshfeedStatus();
+  assert.match(history.children[1].textContent,/Meal dispensed \(observed\).*DP145.*report value 3/);
+  assert.doesNotMatch(quickTime.textContent,/2026-01-01T/); assert.doesNotMatch(freshness.textContent,/2026-01-01T/);
+});
+
+function renderable(card){
+  card._dialog=null;
+  card._root=new Element(); card._root.classList={add(){},remove(){}};
+  card._root.appendChild=function(node){ node.parentNode=this; this.children.push(node); return node; };
+  Object.defineProperty(card._root,'innerHTML',{set(value){ for(const child of this.children) child.parentNode=null; this.children=[]; this._html=value; },get(){ return this._html||''; }});
+  card.shadowRoot={activeElement:null}; card.attachShadow=()=>{};
+  card._render=PetFeederCard.prototype._render;
+}
+const commandMessages=root=>root.children.filter(node=>node.attributes&&'data-command-message' in node.attributes);
+
+test('command rejection arriving while the controls dialog is open is shown in the dialog status region',async()=>{
+  const ctx=setup(); const {card,section}=ctx; const dialog=card._dialog; renderable(card);
+  const commandStatus=new Element('p'); const lookup=section.querySelector;
+  section.querySelector=(s)=>s==='[data-command-status]'?commandStatus:lookup(s);
+  card._config.actions=[{data:{operation:'feed'},confirm:false,icon:'mdi:food'}];
+  let calls=0; let reject;
+  card._hass.callService=()=>{calls++;return new Promise((_,rejectRequest)=>{reject=rejectRequest;});};
+  card._render(); card._onAction(0); await new Promise(resolve=>setImmediate(resolve));
+  card._dialog=dialog; card._updateFreshfeedStatus();
+  assert.equal(commandStatus.textContent,'');
+  reject(Error('private transport sentinel')); await new Promise(resolve=>setImmediate(resolve));
+  assert.match(commandStatus.textContent,/request could not be confirmed/i);
+  assert.doesNotMatch(commandStatus.textContent,/private transport sentinel/);
+  assert.equal(calls,1);
+  card._freshfeedCommandError=null; card._render();
+  assert.equal(commandStatus.textContent,'');
+  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  assert.match(source,/<p class="command-message" data-command-status role="status"><\/p>/);
+});
+
+test('command rejection appears in accessible status and clears when a new request starts',async()=>{
+  const {card}=setup(); renderable(card);
+  card._config.actions=[{data:{operation:'feed'},confirm:false,icon:'mdi:food'}];
+  let calls=0;
+  card._hass.callService=async()=>{calls++;throw Error('private transport sentinel');};
+  card._render();
+  assert.equal(commandMessages(card._root).length,0,'no empty status paragraph before an error');
+  assert.doesNotMatch(card._root.innerHTML,/data-command-message/);
+  card._onAction(0); await new Promise(resolve=>setImmediate(resolve));
+  const [status]=commandMessages(card._root);
+  assert.ok(status,'status element attached on error');
+  assert.equal(status.attributes.role,'status');
+  assert.equal(status.className,'command-message');
+  assert.match(status.textContent,/request could not be confirmed/i);
+  assert.doesNotMatch(status.textContent,/private transport sentinel/);
+  assert.equal(calls,1);
+  card._render();
+  assert.equal(commandMessages(card._root)[0],status,'the same live region element is reused across renders');
+  card._onAction(0);
+  assert.equal(commandMessages(card._root).length,0);
+  assert.equal(status.textContent,'');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls,2);
+  assert.equal(commandMessages(card._root)[0],status);
+});
+
+test('command status text is set only after the live region is attached',async()=>{
+  const {card}=setup(); renderable(card);
+  card._config.actions=[{data:{operation:'feed'},confirm:false,icon:'mdi:food'}];
+  card._hass.callService=async()=>{throw Error('x');};
+  card._render(); card._onAction(0); await new Promise(resolve=>setImmediate(resolve));
+  const [status]=commandMessages(card._root);
+  let attachedAtWrite=null; let value=status.textContent;
+  Object.defineProperty(status,'textContent',{set(v){ attachedAtWrite=this.parentNode===card._root; value=v; },get(){ return value; }});
+  card._freshfeedCommandError=null; card._render(); card._freshfeedCommandError='Retry text'; card._render();
+  assert.equal(attachedAtWrite,true);
+  assert.equal(status.textContent,'Retry text');
+});
+
+test('Aqara cards never render the FreshFeed command status',()=>{
+  const {card}=setup(); card._config=validateConfig({model:'aqara_c1',entities:{}}); renderable(card);
+  card._freshfeedCommandError='Should not show';
+  card._render();
+  assert.equal(commandMessages(card._root).length,0);
+  assert.doesNotMatch(card._root.innerHTML,/data-command-message/);
+});
+
+test('command status has explicit margin and error colour',()=>{
+  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  const rule=source.match(/\n\.command-message \{([^}]*)\}/);
+  assert.ok(rule,'.command-message rule exists');
+  assert.match(rule[1],/margin:/); assert.match(rule[1],/color: var\(--error-color/);
+});
+
+test('card_preserves_unknown_cancel_latch_on_network_error',async()=>{
+  const {card}=setup(); let calls=0;
+  card._hass.states.w.attributes.can_cancel=true; card._hass.states.w.attributes.session_id='s'; card._hass.states.q.state='pending';
+  card._hass.callService=async()=>{calls++;throw Error('network');};
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); await new Promise(resolve=>setImmediate(resolve));
+  card._updateFreshfeedStatus(); card._onCancelCountdown(); card._onCancelCountdown(); assert.equal(calls,1); assert.ok(card._entryCancelLatch());
+});
+
 test('save rejection retains edits and displays an error',async()=>{
   const {card,editor,actions,message}=editable();
   const time=editor.children[0].children[1].children[0]; time.value='09:30'; await time.emit('input');
   card._hass.callService=async()=>{throw new Error('private');}; await button(actions,'Save').click();
-  assert.match(message.textContent,/rejected.*edits were retained/i); assert.equal(time.value,'09:30');
+  assert.match(message.textContent,/could not be confirmed.*Your edits have been retained/i); assert.doesNotMatch(message.textContent,/private/); assert.equal(time.value,'09:30');
   assert.equal(button(actions,'Save').disabled,false);
 });
 
@@ -392,7 +495,7 @@ test('declined or rejected recovery retains uncertainty',async()=>{
   card._hass.states.w={state:'uncertain',attributes:{operation_id:'op',session_id:'session',recovery_can_start:true,recovery_phase:'awaiting_user_confirmation'}};
   card._updateFreshfeedStatus(); let calls=0; globalThis.confirm=()=>false; card._hass.callService=async()=>{calls++;throw Error('private');};
   const recover=recovery.querySelector('[data-recover]'); await recover.click(); assert.equal(calls,0);
-  globalThis.confirm=()=>true; await recover.click(); assert.equal(calls,1); assert.match(message.textContent,/Recovery request rejected/);
+  globalThis.confirm=()=>true; await recover.click(); assert.equal(calls,1); assert.match(message.textContent,/request could not be confirmed/i);
   assert.match(writeStatus.textContent,/uncertain/i); assert.equal(recover.hidden,false);
 });
 
@@ -419,4 +522,87 @@ test('recovery confirms once and latches duplicate clicks through collection',as
   assert.equal(confirms,1); assert.deepEqual(calls,[['petsafe_freshfeed','recover',{entry_id:'entry',operation_id:'op',session_id:'session',confirmed:true}]]);
   attrs.recovery_phase='collecting'; card._updateFreshfeedStatus(); resolve(); await pending;
   attrs.recovery_phase='resolved'; card._updateFreshfeedStatus(); assert.equal(confirms,1); assert.equal(recover.hidden,true);
+});
+
+const LEAD_WARNING='A meal is due within 5 minutes. The feeder may already be preparing it; changes may not affect that meal. Saving is still allowed.';
+test('lead-time warning is a separate polite live region in the dialog template',()=>{
+  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  assert.match(source,/<p data-lead-time-warning role="status" aria-live="polite"><\/p>/);
+});
+
+test('test_warning_never_disables_save_or_changes_payload',async()=>{
+  const {card,actions,leadWarning,message}=editable(); const calls=[]; card._hass.callService=async(...args)=>calls.push(args);
+  card._now=()=>new Date('2026-11-18T06:57:00Z'); card._updateFreshfeedStatus();
+  assert.equal(leadWarning.textContent,LEAD_WARNING); assert.equal(message.textContent,'');
+  assert.equal(button(actions,'Save').disabled,false);
+  await button(actions,'Save').click();
+  assert.deepEqual(calls,[['petsafe_freshfeed','save_schedule',{entry_id:'entry',base_revision:'rev',entries:[{weekmask:127,hour:7,minute:0,enabled:true,audible:false}]}]]);
+  assert.equal(button(actions,'Save').disabled,false); assert.equal(leadWarning.textContent,LEAD_WARNING);
+  for (const [apply,undo] of [
+    [()=>{card._hass.states.s.attributes.revision='other';},()=>{card._hass.states.s.attributes.revision='rev';}],
+    [()=>{card._hass.states.w.attributes.storage_fault=true;},()=>{delete card._hass.states.w.attributes.storage_fault;}],
+    [()=>{card._hass.states.w.state='pending';},()=>{card._hass.states.w.state='idle';}],
+  ]) {
+    apply(); card._updateFreshfeedStatus();
+    assert.equal(button(actions,'Save').disabled,true); assert.equal(leadWarning.textContent,LEAD_WARNING);
+    await button(actions,'Save').click(); assert.equal(calls.length,1);
+    undo(); card._updateFreshfeedStatus(); assert.equal(button(actions,'Save').disabled,false);
+  }
+});
+
+test('test_deleted_current_near_meal_still_warns',async()=>{
+  const {card,editor,actions,leadWarning}=editable(); card._now=()=>new Date('2026-11-18T06:58:00Z'); card._updateFreshfeedStatus();
+  assert.equal(leadWarning.textContent,LEAD_WARNING);
+  await button(editor.children[0],'Delete').click();
+  assert.equal(card._dialog.freshfeed.draft.entries.length,0);
+  assert.equal(leadWarning.textContent,LEAD_WARNING); assert.equal(button(actions,'Save').disabled,false);
+});
+
+test('draft-only near meal warns and timing loss is advisory only',async()=>{
+  const {card,editor,actions,leadWarning}=editable(); card._now=()=>new Date('2026-11-18T08:57:00Z'); card._updateFreshfeedStatus();
+  assert.equal(leadWarning.textContent,'');
+  const time=editor.children[0].children[1].children[0]; time.value='09:00'; await time.emit('input');
+  assert.equal(leadWarning.textContent,LEAD_WARNING);
+  card._hass.config.time_zone=undefined; card._updateFreshfeedStatus();
+  assert.equal(leadWarning.textContent,'Meal timing is unavailable. The feeder may already be preparing a meal; saving is still allowed.');
+  assert.equal(button(actions,'Save').disabled,false);
+});
+
+test('test_tick_updates_warning_without_rebuilding_input',()=>{
+  const {card,editor,leadWarning}=editable(); let now=new Date('2026-11-18T06:50:00Z'); card._now=()=>now;
+  card.attachShadow=()=>{}; delete card._render; card._updateFreshfeedStatus();
+  const draft=card._dialog.freshfeed.draft; const field=editor.children[0]; const input=field.children[1].children[0];
+  assert.equal(leadWarning.textContent,'');
+  now=new Date('2026-11-18T06:56:00Z'); card._render();
+  assert.equal(leadWarning.textContent,LEAD_WARNING);
+  assert.strictEqual(editor.children[0],field); assert.strictEqual(field.children[1].children[0],input); assert.strictEqual(card._dialog.freshfeed.draft,draft);
+  now=new Date('2026-11-18T07:01:00Z'); card._render();
+  assert.equal(leadWarning.textContent,''); assert.strictEqual(editor.children[0],field);
+});
+
+// Layout and focus behaviour are proven in a real browser by
+// test/freshfeed-reparent-focus.test.mjs and harness/check-freshfeed-accessibility.mjs;
+// these checks pin the markup those depend on.
+test('dialog_has_label_modal_and_initial_focus: template is modal and labelled by its visible title',()=>{
+  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  assert.match(source,/<div class="panel" role="dialog" aria-modal="true" aria-labelledby="\$\{titleId\}" tabindex="-1">/);
+  assert.match(source,/<span class="panel-title" id="\$\{titleId\}">/);
+  assert.doesNotMatch(source,/role="dialog" aria-label=/);
+});
+
+test('meal fieldsets, day toggles and delete carry the responsive layout hooks',()=>{
+  const {editor}=editable();
+  const field=editor.children[0];
+  assert.equal(field.className,'meal');
+  const days=field.children.filter(node=>node.attributes['aria-pressed']!==undefined);
+  assert.equal(days.length,7); assert.ok(days.every(node=>node.className==='day'));
+  assert.equal(button(field,'Delete').className,'meal-delete');
+  // Existing child order (legend, time label, days, flags, delete) is unchanged.
+  assert.equal(field.children[1].children[0].type,'time'); assert.equal(field.children[9].children[0].type,'checkbox');
+});
+
+test('closing without a browser DOM is idempotent and never throws',()=>{
+  const {card}=setup(); const dialog=card._dialog; dialog.el.remove=()=>{};
+  card._closeControls(); card._closeControls({restoreFocus:false}); card._closeControls();
+  assert.equal(card._dialog,null); assert.equal(card._activeDialog,null);
 });

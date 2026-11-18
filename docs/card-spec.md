@@ -14,6 +14,34 @@ and a footer of metrics. Two feeder models are supported by artwork and defaults
   with a rounded lid, a tinted translucent hopper window on the front showing the kibble
   level, and a food bowl protruding at the front of the base. Default colour `white`.
 
+## Release 0.4.0 semantic presentation
+
+Integration 0.5.0 is independently versioned. FreshFeed semantic configuration uses
+`freshfeed.entry_id`, `schedule_entity`, `write_status_entity`, `quick_feed_entity`
+and `history_entity`, plus the existing `entities` routes. It is read-only by default;
+controls require explicit opt-in and guarded services require administrator context.
+Aqara and raw observations remain independent of the integration.
+
+`getConfigElement()` lazily imports the visual editor. Registry discovery uses exact
+entry/device/entity bindings, never friendly-name guesses; denied or ambiguous discovery
+offers manual YAML. Existing advanced configuration is retained unless changing feeder
+or incompatible model requires an explicit reset.
+
+FreshFeed labels use Estimated meals, Estimated empty tray and Estimated last meal.
+Compartment position assumes a filled tray; it does not measure food or consumption.
+History uses friendly event labels and HA locale/time-zone formatting, retaining raw
+machine attributes. Unknown service errors use fixed safe copy, never raw exceptions.
+The inclusive 0..5 minute near-meal advisory examines draft and current schedules in
+HA's time zone, including DST folds/gaps. It warns but never disables saving; unavailable
+timing is disclosed, not guessed. It is not verified app pre-defrost parity.
+
+Controls dialogs use `role=dialog`, `aria-modal=true` and visible title linkage, trap
+keyboard focus, support Escape and restore focus on close. The background is inert;
+HA more-info remains usable. Narrow/short layouts scroll internally without losing drafts.
+Observed totals are best-effort local observations, not consumption: no historical
+backfill, no offline coverage and possible loss of unsaved increments on abrupt power loss.
+Diagnostics omit identity and Repairs never mutate retained intent.
+
 ## Visual reference
 
 The Whisker card preview is at `docs/whisker-reference.png` (copy of
@@ -135,8 +163,9 @@ the device counts meals delivered since the last refill (reset on refill). When
 configured, the gauge area shows a meal tray instead of the food gauge (`food_level` still
 drives the status and the LED colour). Same 60% width as the gauges:
 
-- Header like a gauge: uppercase `MEALS` on the left, on the right "4 of 6 left",
-  "Last meal" (1 left), "Refill needed" (0 left) or "Unknown", coloured green when 3 or more
+- FreshFeed header: uppercase `ESTIMATED MEALS`; "Estimated 4 of 6 left",
+  "Estimated last meal" (1 left), "Estimated empty tray" (0 left) or "Unknown".
+  Other model labels retain their existing meanings. Coloured green when 3 or more
   are left, amber at 1-2, red at 0, neutral when unknown (the gauge colour variables).
 - A row of `meal_slots` equal rounded tiles (gap 6px, 34px high, radius 9px), numbered:
   - full: warm wet-food gradient (`#d9874a` -> `#a85a2b`) with highlight dots, white number;
@@ -159,7 +188,8 @@ underlying entity. The controls dialog: an `ha-dialog` (or a simple in-card over
 
 Provide `static getStubConfig()` (model freshfeed, no entities), `getCardSize()` (7) and
 `getGridOptions()` (`{ columns: 12, min_columns: 6, rows: 'auto' }`). Throw a clear
-`Error` from `setConfig` if `model` is missing or unknown. No visual editor.
+`Error` from `setConfig` if `model` is missing or unknown. The lazy visual editor is
+optional; manual YAML remains supported.
 
 ## Normalisation (pure functions, exported, unit tested)
 
@@ -210,7 +240,10 @@ use "in N minutes", "in N hours", "in N days".
 
 ## Engineering constraints
 
-- One deployable ES module: `card/pet-feeder-card.js`. No build step, no npm runtime deps,
+- Four sibling ES modules installed together: `card/pet-feeder-card.js`,
+  `card/freshfeed-model.js`, `card/pet-feeder-card-editor.js` and
+  `card/freshfeed-editor-model.js`, with versioned 0.4.0 imports.
+  No build step, no npm runtime deps,
   no Lit import (HA does not expose Lit to custom cards reliably): plain `HTMLElement` +
   shadow DOM, re-render on `set hass` only when a watched entity's state object changed.
 - The module must import cleanly in Node for tests: guard `customElements.define` and the

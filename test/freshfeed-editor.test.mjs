@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView } from '../card/freshfeed-model.js';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, scheduleLeadTimeWarning } from '../card/freshfeed-model.js';
 
 const row = { weekmask: 127, hour: 8, minute: 0, enabled: true, audible: false };
 
@@ -72,4 +72,14 @@ test('recovery phase and eligibility are projected independently of evidence', (
     assert.equal(view.operationId, 'op');
     assert.equal(view.sessionId, 'session');
   }
+});
+
+test('near-meal advisory leaves validation and save payload signatures unchanged', () => {
+  assert.equal(validateScheduleDraft.length, 1);
+  assert.equal(scheduleSaveData.length, 2);
+  assert.equal(typeof scheduleLeadTimeWarning, 'function');
+  const entries = [{ weekmask: 127, hour: 8, minute: 0, enabled: true, audible: false }];
+  assert.ok(scheduleLeadTimeWarning(entries, new Date('2026-11-18T07:58:00Z'), 'UTC'));
+  assert.deepEqual(validateScheduleDraft(entries), { valid: true, error: null });
+  assert.deepEqual(scheduleSaveData('entry', { entries, baseRevision: 'r' }), { entry_id: 'entry', entries, base_revision: 'r' });
 });
