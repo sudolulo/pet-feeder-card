@@ -27,8 +27,8 @@ test('0.4.1 sibling modules load with their shipped import graph', async () => {
 
 test('release notes preserve history and describe recovery', async () => {
   const text = await readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
-  assert.match(text, /## Integration \[0\.5\.1\] - 2026-11-18/);
-  assert.match(text, /## Card \[0\.4\.1\] - 2026-11-18/);
+  assert.match(text, /## Integration \[0\.5\.1\] - 2026-11-19/);
+  assert.match(text, /## Card \[0\.4\.1\] - 2026-11-19/);
   assert.match(text, /abandonment/i);
   assert.match(text, /0\.5\.0.*strict fallback/i);
   const marker = '## Integration [0.5.0] - 2026-11-18';
