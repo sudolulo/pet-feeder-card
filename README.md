@@ -1,8 +1,14 @@
 # Pet Feeder Card
 
-<img src="assets/brand/readme.png" width="192" alt="Original teal and navy six-compartment feeder mark">
+[![HACS custom](https://img.shields.io/badge/HACS-custom-orange)](https://hacs.xyz/docs/faq/custom_repositories/)
+[![Release](https://img.shields.io/github/v/release/sudolulo/pet-feeder-card)](https://github.com/sudolulo/pet-feeder-card/releases)
+[![License](https://img.shields.io/github/license/sudolulo/pet-feeder-card)](LICENSE)
+
+![FreshFeed card in light and dark themes, with synthetic data](docs/images/card-pair.png)
 
 A Home Assistant dashboard card for PetSafe FreshFeed and Aqara C1. Card version **0.4.1** is independent of the integration version. The FreshFeed integration requires Home Assistant 2026.10.0 or newer; the card's Aqara and raw modes are independent. This community project is not affiliated with PetSafe, FreshFeed or Aqara.
+
+<img src="docs/images/feeder.jpg" width="320" alt="PetSafe FreshFeed feeder (product photo: PetSafe)">
 
 ## Install
 
