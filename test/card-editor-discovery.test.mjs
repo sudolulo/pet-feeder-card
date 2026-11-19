@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const load = () => import('../card/freshfeed-editor-model.js');
+const load = () => import('../dist/freshfeed-editor-model.js');
 // Public HA 2026.10 list results are arrays; device rows use config_entry_id,
 // entity rows expose platform, unique_id and translation_key (not state names).
 export function registry() {

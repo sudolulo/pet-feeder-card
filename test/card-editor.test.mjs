@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateConfig, PetFeederCard} from '../card/pet-feeder-card.js';
-const load=()=>import('../card/freshfeed-editor-model.js');
+import {validateConfig, PetFeederCard} from '../dist/pet-feeder-card.js';
+const load=()=>import('../dist/freshfeed-editor-model.js');
 test('advanced_aqara_raw_configs_round_trip_without_mutation',async()=>{
  const {patchEditorConfig:patch}=await load();
  for(const config of [{model:'aqara_c1',entities:{status:'sensor.cat'},actions:[{action:'button.press',target:{entity_id:'button.cat'}}],unknown:{nested:[1]}},{model:'freshfeed',mode:'raw',raw_entities:['sensor.cat'],unknown:{nested:[2]}}]) {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderArt } from '../card/pet-feeder-card.js';
+import { renderArt } from '../dist/pet-feeder-card.js';
 
 const ff = (over = {}) => renderArt({ model: 'freshfeed', color: 'black', artLevel: 'hopper', statusKey: 'ready', foodPct: 100, ...over });
 const aq = (over = {}) => renderArt({ model: 'aqara_c1', color: 'white', artLevel: 'hopper', statusKey: 'ready', foodPct: 100, ...over });

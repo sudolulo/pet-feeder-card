@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PetFeederCard, validateConfig } from '../card/pet-feeder-card.js';
+import { PetFeederCard, validateConfig } from '../dist/pet-feeder-card.js';
 
 class Element {
   constructor(tag = 'div') { this.tagName = tag; this.children = []; this.dataset = {}; this.attributes = {}; this.textContent = ''; }

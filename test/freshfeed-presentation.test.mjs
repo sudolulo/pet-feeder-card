@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as model from '../card/freshfeed-model.js';
+import * as model from '../dist/freshfeed-model.js';
 
 test('event_labels_cover_seven_kinds_and_unknown', () => {
   for (const [kind,label] of Object.entries({dispensed:'Meal dispensed (observed)',refilled:'Tray refilled (observed)',skipped_empty:'Meal skipped: estimated empty tray',skipped_fault:'Meal skipped: fault',meal_report:'Meal report',all_meals_report:'All meals report',interrupted:'Feeding interrupted',other:'Unknown feeding event'})) assert.equal(model.feedingEventLabel(kind),label);

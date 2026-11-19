@@ -2,16 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { ENTITY_KEYS, validateConfig } from '../card/pet-feeder-card.js';
+import { ENTITY_KEYS, validateConfig } from '../dist/pet-feeder-card.js';
 
-const readme = readFileSync(new URL('../distribution/README-card.md', import.meta.url), 'utf8');
+const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const sections = [...readme.matchAll(/^## (.+)\n([\s\S]*?)(?=^## |$(?![\s\S]))/gm)];
 function yamlUnder(heading) {
   const section = sections.find((m) => m[1] === heading);
   assert.ok(section, `missing heading: ${heading}`);
   const blocks = [...section[2].matchAll(/```yaml\n([\s\S]*?)```/g)];
   assert.equal(blocks.length, 1, `expected one YAML block under ${heading}`);
-  const result = spawnSync('python3', ['-c', 'import sys, yaml, json; print(json.dumps(yaml.safe_load(sys.stdin.read())))'], { input: blocks[0][1], encoding: 'utf8' });
+  const result = spawnSync(process.env.PETSAFE_YAML_PYTHON || 'python3', ['-c', 'import sys, yaml, json; print(json.dumps(yaml.safe_load(sys.stdin.read())))'], { input: blocks[0][1], encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
 }

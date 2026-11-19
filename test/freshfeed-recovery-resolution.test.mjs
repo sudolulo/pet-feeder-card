@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { freshfeedView } from '../card/freshfeed-model.js';
+import { freshfeedView } from '../dist/freshfeed-model.js';
 const config = {freshfeed:{write_status_entity:'w',quick_feed_entity:'q'}};
 const resolution = {operation_id:'cancel-op',session_id:'session',operation:'cancel',outcome:'abandoned'};
 test('bounded recovery resolution preserves unknown and rejects malformed metadata',()=>{

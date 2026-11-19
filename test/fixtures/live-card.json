@@ -1,0 +1,80 @@
+{
+  "type": "custom:pet-feeder-card",
+  "model": "freshfeed",
+  "name": "FreshFeed",
+  "food_label": "Food",
+  "meal_slots": 6,
+  "chip": false,
+  "footer": [
+    "last_fed",
+    "next_meal"
+  ],
+  "entities": {
+    "status": "sensor.petsafe_freshfeed_status",
+    "food_level": "sensor.petsafe_freshfeed_food_level",
+    "error": "binary_sensor.petsafe_freshfeed_fault",
+    "meals_left": "sensor.petsafe_freshfeed_meals_left",
+    "last_fed": "sensor.petsafe_freshfeed_last_fed",
+    "next_meal": "sensor.petsafe_freshfeed_next_meal"
+  },
+  "controls": [
+    "sensor.petsafe_freshfeed_status",
+    "sensor.petsafe_freshfeed_meals_left",
+    "sensor.petsafe_freshfeed_compartment",
+    "sensor.petsafe_freshfeed_food_level",
+    "sensor.petsafe_freshfeed_last_fed",
+    "sensor.petsafe_freshfeed_last_feed_result",
+    "sensor.petsafe_freshfeed_meals_today",
+    "sensor.petsafe_freshfeed_next_meal",
+    "sensor.petsafe_freshfeed_defrost_remaining",
+    "sensor.petsafe_freshfeed_brightness",
+    "sensor.petsafe_freshfeed_firmware_a",
+    "sensor.petsafe_freshfeed_firmware_b",
+    "sensor.petsafe_freshfeed_last_report",
+    "binary_sensor.petsafe_freshfeed_connected",
+    "binary_sensor.petsafe_freshfeed_fault",
+    "binary_sensor.petsafe_freshfeed_out_of_food",
+    "binary_sensor.petsafe_freshfeed_defrosting",
+    "event.petsafe_freshfeed_feeding",
+    "switch.petsafe_freshfeed_stainless_inserts",
+    "switch.petsafe_freshfeed_meal_counter",
+    "number.petsafe_freshfeed_brightness",
+    "sensor.petsafe_freshfeed_quick_feed_state"
+  ],
+  "actions": [
+    {
+      "name": "Feed",
+      "icon": "mdi:food-drumstick",
+      "action": "petsafe_freshfeed.command",
+      "data": {
+        "operation": "feed"
+      },
+      "confirm": true
+    },
+    {
+      "name": "Defrost",
+      "icon": "mdi:snowflake-melt",
+      "action": "petsafe_freshfeed.command",
+      "data": {
+        "operation": "defrost"
+      },
+      "confirm": true
+    },
+    {
+      "name": "Refilled",
+      "icon": "mdi:tray-arrow-down",
+      "action": "petsafe_freshfeed.command",
+      "data": {
+        "operation": "refilled"
+      },
+      "confirm": true
+    }
+  ],
+  "freshfeed": {
+    "entry_id": "REPLACE_WITH_INTEGRATION_ENTRY_ID",
+    "schedule_entity": "sensor.petsafe_freshfeed_schedule",
+    "write_status_entity": "sensor.petsafe_freshfeed_write_status",
+    "quick_feed_entity": "sensor.petsafe_freshfeed_quick_feed",
+    "history_entity": "sensor.petsafe_freshfeed_history"
+  }
+}

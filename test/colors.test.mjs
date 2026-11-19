@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gaugeColor, ledColor } from '../card/pet-feeder-card.js';
+import { gaugeColor, ledColor } from '../dist/pet-feeder-card.js';
 
 test('gauge is green at 50% and above', () => {
   assert.match(gaugeColor(50), /--success-color/);

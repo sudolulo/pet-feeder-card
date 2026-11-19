@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mealSlots } from '../card/pet-feeder-card.js';
+import { mealSlots } from '../dist/pet-feeder-card.js';
 
 const states = (r) => r.slots.map((s) => s.state);
 const nextOf = (r) => r.slots.filter((s) => s.next).map((s) => s.n);

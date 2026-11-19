@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scheduleLeadTimeWarning } from '../card/freshfeed-model.js';
+import { scheduleLeadTimeWarning } from '../dist/freshfeed-model.js';
 
 const WARNING = 'A meal is due within 5 minutes. The feeder may already be preparing it; changes may not affect that meal. Saving is still allowed.';
 const UNAVAILABLE = 'Meal timing is unavailable. The feeder may already be preparing a meal; saving is still allowed.';

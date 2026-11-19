@@ -1,9 +1,9 @@
 // Insert (or replace) the pet-feeder cards on the cat view of the default dashboard.
-// Usage: HA_TOKEN=... node tools/add-cards.mjs deploy/cards.json [--view mdi:broom] [--dry-run]
+// Usage: HA_TOKEN=... node tools/add-cards.mjs <cards.json> [--view mdi:broom] [--dry-run]
 // Idempotent: existing custom:pet-feeder-card cards with the same model are replaced in
 // place; missing ones are added. The target view is located by its icon (default
 // mdi:cat), and the script refuses to save unless exactly one such view exists.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const url = process.env.HA_WS_URL ?? 'ws://homeassistant.local:8123/api/websocket';
 const token = process.env.HA_TOKEN;
@@ -29,6 +29,7 @@ const call = (msg) =>
 
 async function main() {
   const config = await call({ type: 'lovelace/config', url_path: null });
+  mkdirSync(new URL('../deploy/', import.meta.url), { recursive: true });
   writeFileSync(new URL('../deploy/lovelace-before.json', import.meta.url), JSON.stringify(config, null, 2));
   const views = config.views.filter((v) => v.icon === viewIcon);
   if (views.length !== 1) throw new Error(`expected exactly one ${viewIcon} view, found ${views.length}`);

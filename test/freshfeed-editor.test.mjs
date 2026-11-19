@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, scheduleLeadTimeWarning } from '../card/freshfeed-model.js';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, scheduleLeadTimeWarning } from '../dist/freshfeed-model.js';
 
 const row = { weekmask: 127, hour: 8, minute: 0, enabled: true, audible: false };
 

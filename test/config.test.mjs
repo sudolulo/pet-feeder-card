@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateConfig } from '../card/pet-feeder-card.js';
+import { validateConfig } from '../dist/pet-feeder-card.js';
 
 test('missing model throws a clear error', () => {
   assert.throws(() => validateConfig({}), /model.*required/i);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextMeal, parseAqaraSchedule } from '../card/pet-feeder-card.js';
+import { nextMeal, parseAqaraSchedule } from '../dist/pet-feeder-card.js';
 
 // 2026-10-20 is a Tuesday. All dates are local time, as the card uses local time.
 const tue = (h, m = 0, s = 0) => new Date(2026, 9, 20, h, m, s);

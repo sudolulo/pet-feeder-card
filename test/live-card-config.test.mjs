@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildModel, validateConfig } from '../card/pet-feeder-card.js';
+import { buildModel, validateConfig } from '../dist/pet-feeder-card.js';
 
-const loadConfig = () => JSON.parse(readFileSync(new URL('../deploy/freshfeed-live-card.json', import.meta.url), 'utf8'));
+const loadConfig = () => JSON.parse(readFileSync(new URL('./fixtures/live-card.json', import.meta.url), 'utf8'));
 
 test('live FreshFeed card binds read-only entities and renders the empty tray', () => {
   const config = loadConfig();

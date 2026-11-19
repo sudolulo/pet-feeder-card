@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PetFeederCard, validateConfig } from '../card/pet-feeder-card.js';
-import { freshfeedView } from '../card/freshfeed-model.js';
+import { PetFeederCard, validateConfig } from '../dist/pet-feeder-card.js';
+import { freshfeedView } from '../dist/freshfeed-model.js';
 
 const config = () => ({model:'freshfeed',entities:{},freshfeed:{entry_id:'entry',schedule_entity:'s',write_status_entity:'w',quick_feed_entity:'q',history_entity:'h'},actions:['feed','defrost','refilled'].map(operation=>({name:operation,action:'petsafe_freshfeed.command',data:{operation},confirm:true}))});
 function setup() {

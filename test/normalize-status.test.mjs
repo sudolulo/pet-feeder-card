@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeStatus } from '../card/pet-feeder-card.js';
+import { normalizeStatus } from '../dist/pet-feeder-card.js';
 
 test('no status entity means ready', () => {
   assert.deepEqual(normalizeStatus({}), {

@@ -12,9 +12,9 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await chromium.launch({headless:true});
 try {
  const page=await browser.newPage();
- await page.goto(`http://127.0.0.1:${server.address().port}/card/pet-feeder-card.js`);
+ await page.goto(`http://127.0.0.1:${server.address().port}/dist/pet-feeder-card.js`);
  const result=await page.evaluate(async()=>{
-  const {PetFeederCard}=await import('/card/pet-feeder-card.js');
+  const {PetFeederCard}=await import('/dist/pet-feeder-card.js');
   const editor=await PetFeederCard.getConfigElement(); document.body.append(editor);
   const original={type:'custom:pet-feeder-card',model:'aqara_c1',unknown:{nested:[1]},entities:{status:'sensor.original'}};
   const events=[]; editor.addEventListener('config-changed',e=>events.push({config:e.detail.config,bubbles:e.bubbles,composed:e.composed}));
@@ -65,7 +65,7 @@ try {
  assert.equal(result.raw.freshfeed,undefined); assert.equal(result.visibleReset,true); assert.equal(result.pendingCleared,true);
  assert.deepEqual(result.original,{type:'custom:pet-feeder-card',model:'aqara_c1',unknown:{nested:[1]},entities:{status:'sensor.original'}});
  const second=await page.evaluate(async()=>{
-  const {PetFeederCard}=await import('/card/pet-feeder-card.js');
+  const {PetFeederCard}=await import('/dist/pet-feeder-card.js');
   const tick=()=>new Promise(r=>setTimeout(r,20));
   const keys=['schedule','write_status','quick_feed','history'];
   const registry={
@@ -108,7 +108,7 @@ try {
  assert.deepEqual(second.rebound.freshfeed,{entry_id:'b',schedule_entity:'sensor.b_schedule_entity',write_status_entity:'sensor.b_write_status_entity',quick_feed_entity:'sensor.b_quick_feed_entity',history_entity:'sensor.b_history_entity'});
  assert.equal(Object.hasOwn(second.rebound,'entities'),false); assert.deepEqual(second.rebound.actions,[]);
  const polish=await page.evaluate(async()=>{
-  const {PetFeederCard}=await import('/card/pet-feeder-card.js');
+  const {PetFeederCard}=await import('/dist/pet-feeder-card.js');
   const editor=await PetFeederCard.getConfigElement(); document.body.append(editor);
   const events=[]; editor.addEventListener('config-changed',e=>events.push(e.detail.config));
   editor.setConfig({model:'aqara_c1',name:'Old',meal_slots:3});

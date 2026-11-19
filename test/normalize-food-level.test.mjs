@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeFoodLevel } from '../card/pet-feeder-card.js';
+import { normalizeFoodLevel } from '../dist/pet-feeder-card.js';
 
 test('numeric states give that percentage', () => {
   assert.deepEqual(normalizeFoodLevel('42'), { pct: 42, label: '42%' });

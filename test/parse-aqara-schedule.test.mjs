@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAqaraSchedule } from '../card/pet-feeder-card.js';
+import { parseAqaraSchedule } from '../dist/pet-feeder-card.js';
 
 const LIVE =
   "[{'days': 'everyday', 'hour': 7, 'minute': 0, 'size': 3}, {'days': 'everyday', 'hour': 10, 'minute': 0, 'size': 3}, " +

@@ -1,152 +1,96 @@
-# PetSafe FreshFeed and Pet Feeder Card
+# Pet Feeder Card
 
-This repository contains two independently versioned parts:
+<img src="assets/brand/readme.png" width="192" alt="Original teal and navy six-compartment feeder mark">
 
-- **PetSafe FreshFeed integration 0.5.1**: controls a PetSafe FreshFeed feeder directly on
-  your local network (local protocol 3.5, pinned `tinytuya==1.20.0`, which Home Assistant
-  installs). Requires Home Assistant `2026.10.0` or later.
-- **Pet Feeder Card 0.4.1**: a dashboard card for the FreshFeed integration and for the
-  Aqara C1 feeder.
+A Home Assistant dashboard card for PetSafe FreshFeed and Aqara C1. Card version **0.4.1** is independent of the integration version. The FreshFeed integration requires Home Assistant 2026.10.0 or newer; the card's Aqara and raw modes are independent. This community project is not affiliated with PetSafe, FreshFeed or Aqara.
 
-Independent community software, not affiliated with PetSafe or Aqara.
-Only first Wi-Fi pairing and firmware updates need the official PetSafe app.
+## Install
 
-## Installation
+Add `https://github.com/sudolulo/pet-feeder-card` to HACS custom repositories as **Dashboard**, then download. If HACS registered the resource, do not add it twice; otherwise add `/hacsfiles/pet-feeder-card/pet-feeder-card.js` as a JavaScript module resource. Refresh the browser. For manual installation, copy all four distribution modules (`pet-feeder-card.js`, `freshfeed-model.js`, `pet-feeder-card-editor.js`, `freshfeed-editor-model.js`) into `/config/www/pet-feeder-card/`, and register `/local/pet-feeder-card/pet-feeder-card.js` as a module resource. Do not use a single-file release asset.
 
-Integration: in HACS, add `https://github.com/sudolulo/petsafe-freshfeed` as a custom
-repository (category **Integration**) and download it, or copy
-`custom_components/petsafe_freshfeed` into your `custom_components` folder. Restart
-Home Assistant.
+The visual editor discovers FreshFeed devices and entities using the Home Assistant registry when available. If discovery is denied, missing or ambiguous, use its manual fields or YAML and supply the correct bindings yourself.
 
-Card: in HACS, add `https://github.com/sudolulo/pet-feeder-card` (category
-**Dashboard**), or copy all four modules (`pet-feeder-card.js`, `freshfeed-model.js`,
-`pet-feeder-card-editor.js`, `freshfeed-editor-model.js`) together into
-`/config/www/pet-feeder-card/` and register `pet-feeder-card.js` as a module resource.
+## FreshFeed raw example
 
-Home Assistant installs one TinyTuya shared by every integration. If another
-integration needs a different version, the feeder entry stays unavailable
-(`owned_source_incompatible`) rather than run unchecked code.
+Replace example IDs with your own. Raw mode displays selected literal states without inferred health or controls.
 
-## Sign in and setup
+```yaml
+type: custom:pet-feeder-card
+model: freshfeed
+mode: raw
+raw_entities:
+  - sensor.example_state
+  - binary_sensor.example_fault
+```
 
-1. Add **PetSafe FreshFeed** under Settings > Devices & services.
-2. Sign in with your PetSafe account. Regions: 1 (Americas), 44 (Europe), 91 (India)
-   and 7 (Russia).
-3. Choose the feeder. The integration finds it on the LAN or asks for its private IPv4
-   address, and one read-only status check must succeed before anything is saved. The
-   entry starts read-only.
+## Aqara example
 
-If sign-in is not available in this installation, setup stops; there is no fallback.
-Setup also stops if another enabled integration holds the feeder's local connection.
-Entries that used the removed Tuya Local connection method fail to start with a clear
-message, and nothing is changed. **Reconfigure** changes only the address.
+Use entities supplied by an existing integration, such as Zigbee2MQTT.
 
-**Cloud reads.** Sign-in and cloud reads are read-only; every command is local. New
-setups turn cloud reads on: when the feeder has not reported its quick-feed state or
-schedule since connecting, the integration reads them on demand, at most once per 60
-seconds. **Fully local** (entry Configure options) turns this off and deletes the
-stored cloud session (sid and ecode). Upgraded entries start Fully local. A valid
-session is restored after a restart; if it is rejected or cannot be restored, Repairs
-asks you to sign in again through Home Assistant while local operation continues.
+```yaml
+type: custom:pet-feeder-card
+model: aqara_c1
+entities:
+  food_level: sensor.example_food_level
+  portions_today: sensor.example_portions_today
+```
 
-**Privacy.** Your password is never stored, nor your email. The device ID, local key,
-address and cloud session are stored unencrypted in the config entry, like other Home
-Assistant entries, and kept out of logs and diagnostics. Whether sign-in signs the
-phone app out has not been checked.
-Make a full Home Assistant backup and keep it secret; it contains the local key.
+These raw and Aqara examples configure no actions and send no device commands. Missing or unavailable entities do not prove a fault.
 
-## Entities
+## FreshFeed semantic example
 
-| Group | Examples and interpretation |
-|---|---|
-| Status | Status, Compartment, Quick feed, Defrost remaining, Defrosting, Write status; unknown means not reported. |
-| Estimates | Estimated meals remaining, Estimated food level: from compartment position assuming a refilled tray, not measured food. Next meal is a schedule projection, not a device promise. |
-| Schedule | Schedule, reported locally or labelled "Read from the PetSafe cloud". A last-known plan stays editable; unknown is not an empty plan. |
-| History/statistics | History, Last fed, Last feed result, Meals today, Observed meals dispensed total: local observations only, no backfill, excluding offline gaps and cloud history. |
-| Connectivity | Connected, Last report: observations available, not a guarantee of command success. |
-| Faults | Fault (reported) and Estimated empty tray (estimate). |
-| Events | Feeding: seven observed event types, also device triggers; not proof of consumption. |
-| Settings | Stainless inserts, Meal counter, Display brightness (opt-in, guarded). Diagnostic: Brightness, Firmware version, Hardware version, Quick feed state. |
+Install the [FreshFeed integration](https://github.com/sudolulo/petsafe-freshfeed) separately and replace all example bindings with your actual integration entry and entities. This example configures no action buttons, but is **not inherently read-only**: the FreshFeed dialog can save schedules and expose guarded commands and recovery when integration controls are enabled and administrator and state checks permit them.
 
-Statistics start at zero without backfill; abrupt power loss can lose unsaved increments.
+```yaml
+type: custom:pet-feeder-card
+model: freshfeed
+freshfeed:
+  entry_id: example_entry_123
+  schedule_entity: sensor.example_schedule
+  write_status_entity: sensor.example_write_status
+  quick_feed_entity: sensor.example_quick_feed
+  history_entity: sensor.example_history
+entities:
+  status: sensor.example_status
+  food_level: sensor.example_food_level
+  meals_left: sensor.example_meals_left
+  last_fed: sensor.example_last_fed
+  next_meal: sensor.example_next_meal
+  error: binary_sensor.example_fault
+```
 
-## Controls
+## Confirmed Feed fragment
 
-Choose **Enable controls** in the entry's Configure options. Feed, Cancel, Defrost
-and Refilled require explicit confirmation. Command, recovery and schedule-save
-services require an authenticated administrator; automations without a user context
-cannot call those services. Schedule saves and setting changes do not require
-explicit confirmation. Settings use normal Home Assistant entity access. Each command is
-sent once, never retried, and confirmed only by the feeder's own local report, never
-by a cloud reading. A report is not proof of physical feeding. Feed is refused on an
-empty tray. Cancel needs a reported pending quick feed and is not an emergency stop.
+Add this actions-only fragment to the semantic example if you want a Feed button. The existing `freshfeed.entry_id` supplies the entry ID; the card supplies `confirmed: true` only after its confirmation gesture.
 
-If the feeder has never reported its quick-feed state since connecting, Feed, Defrost,
-Refilled and settings need local reports from the last 35 seconds showing a resting
-status, no defrost and a valid compartment, even with a cloud reading. Active or invalid
-cloud readings block these commands, including after expiry until superseded locally or
-reconnection. Once the feeder has reported its quick-feed state locally, the latest local
-report decides: an active or invalid value blocks these commands, and a later idle report
-allows them again under the same freshness and safety checks.
-A pending quick feed the feeder never reported could result in an extra meal.
-The same applies when cloud reads fail or are out of date.
+```yaml
+actions:
+  - name: Feed
+    icon: mdi:food-drumstick
+    action: petsafe_freshfeed.command
+    data:
+      operation: feed
+    confirm: true
+```
 
-**Schedule.** Saving sends the whole schedule (up to 10 rows). Revision checks detect
-changes the integration has observed since loading, not every external change. If an
-external writer changes the schedule before its update arrives, that change can be
-overwritten. A cloud plan is not an acknowledgement of a save; a later local
-report replaces it. In Fully local mode a never-observed schedule stays unknown and
-cannot be viewed or replaced; turn on cloud reads to retrieve it. The card's
-five-minute near-meal warning is advisory and does not block saving.
+## Configuration reference
 
-Services: `petsafe_freshfeed.command`, `petsafe_freshfeed.save_schedule` (pass the
-Schedule `revision` as `base_revision`) and `petsafe_freshfeed.recover` (the
-`operation_id` and `session_id` from Write status).
+- `type`: `custom:pet-feeder-card`. Required `model`: `freshfeed` or `aqara_c1`.
+- `mode`: `standard` by default; `raw` is FreshFeed only. Raw requires `raw_entities`: 1 to 32 unique `sensor` or `binary_sensor` entity IDs with lowercase letters, digits or underscores in the object ID, and disallows nonempty `entities`, `actions` and `controls` and the `freshfeed` mapping. It forces chip off, empty footer and no meal tray. `raw_entities` is prohibited in standard mode.
+- `name` defaults to FreshFeed or Aqara C1; `color` is `black` or `white` (defaults black for FreshFeed, white for Aqara); `food_label` defaults to Food; `art_level` is `hopper` (default) or `bowl`.
+- `meal_slots` is an integer from 1 to 12 or null (no tray); defaults to 6 for FreshFeed and null for Aqara.
+- `entities` maps any of `status`, `food_level`, `error`, `last_feed`, `last_fed`, `portions_today`, `weight_today`, `counter`, `meals_left`, `schedule`, `next_meal`, `temperature`, `camera` to entity IDs.
+- Optional `freshfeed` enables semantic integration features only in FreshFeed standard mode. Supply all five nonempty fields and no others: `entry_id`, `schedule_entity`, `write_status_entity`, `quick_feed_entity`, `history_entity`. Use the real entry ID, not a placeholder.
+- `chip` defaults to `last_feed`; set false or null to hide it. `footer` defaults to [`last_fed`, `portions_today`, `next_meal`] and accepts at most 3 items. Both accept display keys `last_feed`, `last_fed`, `portions_today`, `weight_today`, `counter`, `next_meal`, `temperature`, `food_level`.
+- `actions` defaults to an empty list and accepts at most 3 buttons. Each requires `action: domain.service` and may specify `name`, `icon`, `target`, `data` and `confirm`. Name defaults to the action, icon to `mdi:gesture-tap-button`, and confirmation defaults true. With `freshfeed` bound, only `petsafe_freshfeed.command` with data containing exactly `operation: feed`, `defrost`, or `refilled` is allowed; no target, extra data fields or `confirm: false`. Cancel and recovery belong to the dialog.
+- `controls` defaults to an empty list of entity IDs. With `freshfeed` bound, `text` and `button` entity controls are prohibited.
 
-## Recovery
+## Safety and limitations
 
-After a restart or an unconfirmed command, controls stay locked until you inspect the
-feeder and choose recovery. Recovery never sends a command; it watches fresh local
-reports for up to 35 seconds. Strict recovery clears the lock only when the required
-operation-specific evidence and safety checks pass. With explicit administrator
-confirmation, fresh safe local reports, including an empty status, may instead allow
-local abandonment, execution unknown: this does not prove whether the
-old command ran or that the tray was filled. New commands are checked separately.
+Controls are opt-in in integration options and require an administrator context; automations are not automatically authorized. Cancel is not an emergency stop. Inspect the feeder before recovery. Recovery uses local read-only observations and sends no command. Strict observed-safe recovery clears local uncertainty when the required evidence is present, but does not prove physical success. Local abandonment can release an uncertain operation but its execution remains unknown. With a 0.5.0 backend, the card uses the strict resolved and reported-idle fallback rather than inferring abandonment. It does not prove the feeder is idle or that the previous operation completed. New commands are separately checked: an empty tray still denies feeding. If the feeder has not reported its quick-feed state, a narrow fresh-local observation exception can permit a new command; a pending unreported feed could cause an extra meal. Check the feeder before acting. Do not retry a possibly sent command or delete/reset storage as a workaround.
 
-## Troubleshooting
+A last-known schedule remains visible and editable; unknown is not an empty plan. In Fully local mode a never-observed schedule cannot be replaced until observed. A cloud-read plan is labelled as such and cannot acknowledge a command. The five-minute near-meal warning is advisory and does not block saving. Food and meals remaining are estimates based on compartments and an assumed refill, not measurements of food or consumption. History and statistics reflect locally observed reports, exclude offline gaps and cloud history, have no backfill, and recent unsaved increments can be lost. A displayed next meal is a projection, not a promise.
 
-- Check Settings > System > Repairs and download the integration's redacted diagnostics.
-- Unavailable: check feeder power, the LAN and its address, then **Reconfigure**.
-- Uncertain command: inspect the feeder and use recovery.
-- Do not delete or reset storage, or repeat a possibly sent command.
+Check Home Assistant **Settings > System > Repairs**, download redacted integration diagnostics, and check feeder power, LAN and address if unavailable. Reconfigure the address rather than resetting. See the [integration README](https://github.com/sudolulo/petsafe-freshfeed) for setup, privacy, safety and optional blueprints; HACS does not automatically install root blueprints, which notify or update helpers rather than command the feeder. The official app is needed only for first Wi-Fi pairing and firmware updates, not routine recovery.
 
-## Pet Feeder Card
-
-The card shows a status header, product artwork, round action buttons, a chip, a food
-gauge and a metrics footer for two models: `freshfeed` (PetSafe FreshFeed) and
-`aqara_c1` (Aqara C1, for example via Zigbee2MQTT). With the integration and controls
-enabled, the FreshFeed dialog can save schedules, issue guarded commands and run
-recovery; it is not read-only. A locally abandoned recovery shows "Local uncertainty
-cleared; execution unknown." `mode: raw` shows selected entity states literally,
-without actions or inferred meaning. The visual editor discovers entities where
-registry access permits; manual YAML remains available. The full configuration
-reference is in the [card README](https://git.arch.fyi/flan/pet-feeder-card/src/branch/main/distribution/README-card.md).
-
-## Blueprints
-
-HACS does not automatically install root blueprints; import them or copy the YAML into
-`/config/blueprints/automation/petsafe_freshfeed/`. They notify or update helpers, not
-feeder commands. Links are source locations, not a claim of publication.
-
-- Low estimated meals: [source](https://raw.githubusercontent.com/sudolulo/petsafe-freshfeed/main/blueprints/automation/petsafe_freshfeed/low_estimated_meals.yaml) / [import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fsudolulo%2Fpetsafe-freshfeed%2Fmain%2Fblueprints%2Fautomation%2Fpetsafe_freshfeed%2Flow_estimated_meals.yaml)
-- Feeder attention: [source](https://raw.githubusercontent.com/sudolulo/petsafe-freshfeed/main/blueprints/automation/petsafe_freshfeed/feeder_attention.yaml) / [import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fsudolulo%2Fpetsafe-freshfeed%2Fmain%2Fblueprints%2Fautomation%2Fpetsafe_freshfeed%2Ffeeder_attention.yaml)
-- Refill/cleaning: [source](https://raw.githubusercontent.com/sudolulo/petsafe-freshfeed/main/blueprints/automation/petsafe_freshfeed/refill_cleaning_reminder.yaml) / [import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fsudolulo%2Fpetsafe-freshfeed%2Fmain%2Fblueprints%2Fautomation%2Fpetsafe_freshfeed%2Frefill_cleaning_reminder.yaml)
-
-## Development
-
-Tests, the browser harness, distribution builds, protocol notes and separately
-authorized maintainer procedures are in [docs/DEVELOPMENT.md](https://git.arch.fyi/flan/pet-feeder-card/src/branch/main/docs/DEVELOPMENT.md).
-Run `npm test` and the Python suites described there; nothing in this README contacts a
-live Home Assistant. Canonical development: https://git.arch.fyi/flan/pet-feeder-card.
-Integration issues: https://github.com/sudolulo/petsafe-freshfeed/issues. MIT licensed;
-see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Issues: https://github.com/sudolulo/pet-feeder-card/issues. Canonical development: https://git.arch.fyi/flan/pet-feeder-card. Original artwork and code are MIT licensed; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

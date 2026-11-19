@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const failureView = () => JSON.parse(readFileSync(new URL('./fixtures/cancel-observed-failure.json', import.meta.url), 'utf8'));
-import { PetFeederCard, validateConfig } from '../card/pet-feeder-card.js';
+import { PetFeederCard, validateConfig } from '../dist/pet-feeder-card.js';
 
 const config = () => ({model:'freshfeed',entities:{},freshfeed:{entry_id:'entry',schedule_entity:'s',write_status_entity:'w',quick_feed_entity:'q',history_entity:'h'}});
 class Element {
@@ -481,7 +481,7 @@ test('command rejection arriving while the controls dialog is open is shown in t
   assert.equal(calls,1);
   card._freshfeedCommandError=null; card._render();
   assert.equal(commandStatus.textContent,'');
-  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  const source=readFileSync(new URL('../dist/pet-feeder-card.js', import.meta.url),'utf8');
   assert.match(source,/<p class="command-message" data-command-status role="status"><\/p>/);
 });
 
@@ -533,7 +533,7 @@ test('Aqara cards never render the FreshFeed command status',()=>{
 });
 
 test('command status has explicit margin and error colour',()=>{
-  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  const source=readFileSync(new URL('../dist/pet-feeder-card.js', import.meta.url),'utf8');
   const rule=source.match(/\n\.command-message \{([^}]*)\}/);
   assert.ok(rule,'.command-message rule exists');
   assert.match(rule[1],/margin:/); assert.match(rule[1],/color: var\(--error-color/);
@@ -631,7 +631,7 @@ test('recovery confirms once and latches duplicate clicks through collection',as
 
 const LEAD_WARNING='A meal is due within 5 minutes. The feeder may already be preparing it; changes may not affect that meal. Saving is still allowed.';
 test('lead-time warning is a separate polite live region in the dialog template',()=>{
-  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  const source=readFileSync(new URL('../dist/pet-feeder-card.js', import.meta.url),'utf8');
   assert.match(source,/<p data-lead-time-warning role="status" aria-live="polite"><\/p>/);
 });
 
@@ -689,7 +689,7 @@ test('test_tick_updates_warning_without_rebuilding_input',()=>{
 // test/freshfeed-reparent-focus.test.mjs and harness/check-freshfeed-accessibility.mjs;
 // these checks pin the markup those depend on.
 test('dialog_has_label_modal_and_initial_focus: template is modal and labelled by its visible title',()=>{
-  const source=readFileSync(new URL('../card/pet-feeder-card.js', import.meta.url),'utf8');
+  const source=readFileSync(new URL('../dist/pet-feeder-card.js', import.meta.url),'utf8');
   assert.match(source,/<div class="panel" role="dialog" aria-modal="true" aria-labelledby="\$\{titleId\}" tabindex="-1">/);
   assert.match(source,/<span class="panel-title" id="\$\{titleId\}">/);
   assert.doesNotMatch(source,/role="dialog" aria-label=/);
