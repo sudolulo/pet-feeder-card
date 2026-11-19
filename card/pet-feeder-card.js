@@ -1,7 +1,7 @@
 /*
  * pet-feeder-card -- Home Assistant Lovelace custom card for pet feeders.
  */
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.0';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.1';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -998,7 +998,7 @@ export function renderArt(art) {
 // Custom element
 // ---------------------------------------------------------------------------
 
-const CARD_VERSION = '0.4.0';
+const CARD_VERSION = '0.4.1';
 const CONFIRM_MS = 4000;
 const TICK_MS = 60000; // refresh relative times once a minute
 
@@ -1295,7 +1295,7 @@ let modalOwner = null;
 
 export class PetFeederCard extends Base {
   static async getConfigElement() {
-    await import('./pet-feeder-card-editor.js?v=0.4.0');
+    await import('./pet-feeder-card-editor.js?v=0.4.1');
     return document.createElement('pet-feeder-card-editor');
   }
 
@@ -1805,8 +1805,8 @@ export class PetFeederCard extends Base {
   _canFreshfeedAction(operation) {
     const view = freshfeedView(this._config, this._hass);
     if (this._entryCancelLatch() || this._freshfeedCommandPending || this._freshfeedSaving || this._freshfeedRecovering || view.storageFault || view.integrityFault || !['idle', 'verified'].includes(view.writeState)) return false;
-    if (operation === 'feed') return view.canFeed && !['pending', 'feeding'].includes(view.quickFeed.status) && view.quickFeed.status !== null;
-    if (operation === 'defrost') return view.canDefrost && view.quickFeed.status !== null && view.quickFeed.status !== 'pending';
+    if (operation === 'feed') return view.canFeed && !['pending', 'feeding'].includes(view.quickFeed.status);
+    if (operation === 'defrost') return view.canDefrost && view.quickFeed.status !== 'pending';
     return operation === 'refilled' && view.canRefilled;
   }
 
@@ -1817,6 +1817,17 @@ export class PetFeederCard extends Base {
     this._dialog.freshfeed = { section, draft: createScheduleDraft(freshfeedView(this._config, this._hass).schedule), error: null };
     section.querySelector('[data-cancel-countdown]').addEventListener('click', () => this._onCancelCountdown());
     this._renderScheduleEditor();
+    this._refreshFreshfeedSchedule();
+  }
+
+  async _refreshFreshfeedSchedule() {
+    try {
+      await this._hass.callService('homeassistant', 'update_entity', {
+        entity_id: this._config.freshfeed.schedule_entity,
+      });
+    } catch {
+      // A later manual refresh can retry after a failure or cooldown.
+    }
   }
 
   _disarmCancel() {
@@ -1872,6 +1883,12 @@ export class PetFeederCard extends Base {
     const actions = d.section.querySelector('[data-actions]');
     editor.replaceChildren();
     actions.replaceChildren();
+    if (!d.draft) {
+      const refresh = document.createElement('button');
+      refresh.type = 'button'; refresh.textContent = 'Refresh schedule';
+      refresh.addEventListener('click', () => this._refreshFreshfeedSchedule());
+      actions.appendChild(refresh);
+    }
     if (d.draft) {
       const days = [['Sun', 0], ['Mon', 6], ['Tue', 5], ['Wed', 4], ['Thu', 3], ['Fri', 2], ['Sat', 1]];
       d.draft.entries.forEach((row, index) => {
@@ -1961,9 +1978,9 @@ export class PetFeederCard extends Base {
       } else if (latch.sessionId && view.sessionId === latch.sessionId && view.writeState === 'idle' && view.reason === 'observed_failure' && view.operationId === null && view.operation === null && view.observedFailure?.operation === 'cancel' && view.observedFailure.sessionId === latch.sessionId && view.observedFailure.operationId !== latch.operationId && view.observedFailure.operationId !== latch.failureOperationId && !view.storageFault && !view.integrityFault) {
         this._clearCancelLatch(latch);
         this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Cancel failed — device status observed' };
-      } else if (latch.recovery && view.sessionId === latch.recovery.sessionId && view.operationId === null && view.operation === null && view.recoveryPhase === 'resolved' && view.writeState === 'idle' && view.quickFeed.status === 'idle' && !view.storageFault && !view.integrityFault) {
+      } else if (latch.recovery && view.sessionId === latch.recovery.sessionId && view.operationId === null && view.operation === null && view.recoveryPhase === 'resolved' && view.writeState === 'idle' && !view.storageFault && !view.integrityFault && (view.recoveryResolutionPresent ? (view.recoveryResolution?.operation === 'cancel' && view.recoveryResolution.operationId === latch.recovery.operationId && view.recoveryResolution.sessionId === latch.recovery.sessionId && (view.recoveryResolution.outcome === 'abandoned' || view.quickFeed.status === 'idle')) : view.quickFeed.status === 'idle')) {
         this._clearCancelLatch(latch);
-        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: 'Local uncertainty cleared; device status observed.' };
+        this._cancelOutcome = { entryId: latch.entryId, signature: this._cancelSignature(view), text: view.recoveryResolution?.outcome === 'abandoned' ? 'Local uncertainty cleared; execution unknown.' : 'Local uncertainty cleared; device status observed.' };
       } else if (view.writeState === 'uncertain') latch.outcome = 'Outcome uncertain';
     }
     // Completed observations describe only this entry and this reported operation/state.
@@ -2037,7 +2054,7 @@ export class PetFeederCard extends Base {
     }
     text.textContent = '';
     if (view.recoveryPhase === 'collecting') text.textContent = 'Waiting for device reports (up to 35 seconds).';
-    else if (view.recoveryPhase === 'resolved') text.textContent = 'Local uncertainty cleared; this does not confirm physical success.';
+    else if (view.recoveryPhase === 'resolved') text.textContent = view.recoveryResolution?.outcome === 'abandoned' ? 'Local uncertainty cleared; execution unknown.' : 'Local uncertainty cleared; this does not confirm physical success.';
     else if (view.recoveryPhase === 'awaiting_user_confirmation' || view.recoveryPhase === 'failed') {
       text.textContent = `Check the device. Uncertainty returns after restart. Operation: ${view.operation || 'unknown'} (${view.operationId || 'unknown'}); session: ${view.sessionId || 'unknown'}.${view.reason ? ` ${view.reason}` : ''}${view.blockedReason ? ` ${view.blockedReason}` : ''}`;
     }

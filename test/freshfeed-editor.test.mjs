@@ -33,12 +33,18 @@ test('validation requires bounded integer fields, boolean flags, and at most ten
   assert.equal(validateScheduleDraft([{ ...row, extra: true }]).valid, false);
 });
 
+test('cloud schedule freshness is explicitly labelled', () => {
+  const view = freshfeedView({freshfeed: {schedule_entity: 's'}}, {states: {s: {attributes: {entries: [], source_state: 'last_known', provenance: 'cloud'}}}});
+  assert.equal(view.freshnessLabel, 'Read from the PetSafe cloud');
+});
+
 test('missing entities yield the complete safe view', () => {
   assert.deepEqual(freshfeedView({ freshfeed: {} }, { states: {} }), {
     schedule: { entries: null, source_state: 'unknown', observed_at: null, revision: null, source_entity_id: null, error: null },
     draftAvailable: false, freshnessLabel: 'Unknown', lastSeen: null,
     writeState: 'blocked', operationId: null, operation: null, sessionId: null, reason: null, observedFailure: null,
     storageFault: false, integrityFault: false, recoveryCanStart: false, recoveryPhase: 'idle',
+    recoveryResolutionPresent: false, recoveryResolution: null,
     canFeed: false, canDefrost: false, canRefilled: false, blockedReason: null, canCancel: false, cancelReason: null,
     quickFeed: { status: null, command: null, minutes: null, haUpdated: null },
     history: { basis: 'ha_observed', events: [], dp151Supported: false },

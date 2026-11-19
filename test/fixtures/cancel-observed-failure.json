@@ -15,6 +15,7 @@
     "integrity_fault": false,
     "recovery_can_start": false,
     "recovery_phase": "idle",
+    "recovery_resolution": null,
     "observed_failure": {"operation_id": "cancel-op", "operation": "cancel", "session_id": "session"}
   }
 }

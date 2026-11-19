@@ -36,7 +36,7 @@ test('common server gates and missing source fail closed for all commands',()=>{
 });
 
 test('feed and defrost obey live quick status and server exhausted/active restrictions',()=>{
-  for(const state of ['pending','feeding','unknown','unavailable','unexpected']) {
+  for(const state of ['pending','feeding']) {
     const {card}=setup(); card._hass.states.q.state=state;
     assert.equal(card._canFreshfeedAction('feed'),false,state);
   }
@@ -46,6 +46,17 @@ test('feed and defrost obey live quick status and server exhausted/active restri
   assert.equal(card._canFreshfeedAction('feed'),false,'exhausted counter server flag');
   assert.equal(card._canFreshfeedAction('defrost'),false,'active defrost server flag');
   assert.equal(freshfeedView(card._config,card._hass).quickFeed.minutes,null);
+});
+
+test('unknown quick-feed status uses authoritative backend feed and defrost gates',()=>{
+  for (const operation of ['feed','defrost']) {
+    for (const allowed of [true,false]) {
+      const {card}=setup();
+      card._hass.states.q.state='unknown';
+      card._hass.states.w.attributes[`can_${operation}`]=allowed;
+      assert.equal(card._canFreshfeedAction(operation),allowed,`${operation}: ${allowed}`);
+    }
+  }
 });
 
 test('parity rejects raw bypasses, cancel/now and placeholder while legacy and raw stay isolated',()=>{

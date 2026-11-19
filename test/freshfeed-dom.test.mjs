@@ -37,6 +37,94 @@ function setup(){
 }
 test.afterEach(()=>{globalThis.document=originalDocument;globalThis.confirm=originalConfirm;});
 
+test('opening schedule requests refresh and unavailable schedule can be retried', async()=>{
+  const {card,section,actions}=setup(); const calls=[];
+  card._hass.callService=async(...args)=>{calls.push(args); if(calls.length===1) throw Error('unavailable');};
+  const create=globalThis.document.createElement;
+  globalThis.document.createElement=(tag)=>tag==='section'?section:create(tag);
+  card._dialog={el:new Element()};
+  card._buildFreshfeed(new Element());
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,[['homeassistant','update_entity',{entity_id:'s'}]]);
+  assert.equal(card._dialog.freshfeed.draft,null);
+  assert.equal(card._dialog.freshfeed.error,null);
+  const retry=actions.children.find(node=>node.textContent==='Refresh schedule');
+  assert.ok(retry);
+  await retry.click();
+  assert.deepEqual(calls,[['homeassistant','update_entity',{entity_id:'s'}],['homeassistant','update_entity',{entity_id:'s'}]]);
+});
+
+test('successful schedule refresh populates the open dialog with an editable cloud schedule', async()=>{
+  const {card,section,editor,actions,message,freshness}=setup(); const calls=[];
+  const create=globalThis.document.createElement;
+  globalThis.document.createElement=(tag)=>tag==='section'?section:create(tag);
+  card._hass.callService=async(...args)=>{calls.push(args);};
+  card._dialog={el:new Element()};
+  card._buildFreshfeed(new Element());
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(card._dialog.freshfeed.draft,null);
+  assert.match(message.textContent,/Schedule unavailable/);
+  const entries=[{weekmask:127,hour:7,minute:0,enabled:true,audible:false}];
+  card.hass={...card._hass,states:{...card._hass.states,s:{state:'1',attributes:{source_state:'last_known',provenance:'cloud',revision:'cloud-rev',entries}}}};
+  assert.equal(freshness.textContent,'Read from the PetSafe cloud');
+  assert.equal(card._dialog.freshfeed.draft.baseRevision,'cloud-rev');
+  assert.equal(editor.children.length,1);
+  const time=editor.children[0].querySelector('input');
+  assert.equal(time.value,'07:00');
+  time.value='08:30'; await time.emit('input');
+  assert.equal(button(actions,'Save').disabled,false);
+  await button(actions,'Save').click();
+  assert.deepEqual(calls,[['homeassistant','update_entity',{entity_id:'s'}],['petsafe_freshfeed','save_schedule',{entry_id:'entry',base_revision:'cloud-rev',entries:[{...entries[0],hour:8,minute:30}]}]]);
+});
+
+for (const mismatch of [null, 'operation', 'session', 'id', 'phase', 'barrier', 'fault', 'malformed']) {
+  test(`abandonment releases only the matching cancel recovery: ${mismatch}`,()=>{
+    const {card,cancelMessage,quickStatus,recovery}=setup();
+    const latch={entryId:'entry',sessionId:'session',operationId:null,recovery:{operationId:'cancel-op',sessionId:'session'}};
+    card._cancelLatch=latch;
+    const resolution={operation_id:'cancel-op',session_id:'session',operation:'cancel',outcome:'abandoned'};
+    const attrs={session_id:'session',operation_id:null,operation:null,recovery_phase:'resolved',recovery_resolution:resolution};
+    if(mismatch==='operation') resolution.operation='feed';
+    if(mismatch==='session') resolution.session_id='other';
+    if(mismatch==='id') resolution.operation_id='other';
+    if(mismatch==='phase') attrs.recovery_phase='failed';
+    if(mismatch==='fault') attrs.storage_fault=true;
+    if(mismatch==='malformed') attrs.recovery_resolution={};
+    card._hass.states.w={state:mismatch==='barrier'?'uncertain':'idle',attributes:attrs};
+    card._hass.states.q={state:'unknown',attributes:{}};
+    card._updateFreshfeedStatus();
+    assert.equal(card._entryCancelLatch()===null,mismatch===null);
+    assert.equal(quickStatus.textContent,'Unknown');
+    assert.equal(card._canFreshfeedAction('feed'),false);
+    if(mismatch===null) {
+      assert.equal(cancelMessage.textContent,'Local uncertainty cleared; execution unknown.');
+      assert.equal(recovery.querySelector('[data-recovery-message]').textContent,'Local uncertainty cleared; execution unknown.');
+    }
+  });
+}
+
+for (const [resolution, quick, releases] of [
+  ['observed_safe', 'idle', true],
+  ['observed_safe', 'unknown', false],
+  ['absent', 'idle', true],
+  ['absent', 'unknown', false],
+  ['absent', 'ready', false],
+  ['malformed', 'idle', false],
+]) {
+  test(`resolved cancel latch: ${resolution} with ${quick}`,()=>{
+    const {card,quickStatus}=setup();
+    card._cancelLatch={entryId:'entry',sessionId:'session',operationId:null,recovery:{operationId:'cancel-op',sessionId:'session'}};
+    const attrs={session_id:'session',operation_id:null,operation:null,recovery_phase:'resolved'};
+    if(resolution==='observed_safe') attrs.recovery_resolution={operation_id:'cancel-op',session_id:'session',operation:'cancel',outcome:'observed_safe'};
+    if(resolution==='malformed') attrs.recovery_resolution={};
+    card._hass.states.w={state:'idle',attributes:attrs};
+    card._hass.states.q={state:quick,attributes:{status:quick}};
+    card._updateFreshfeedStatus();
+    assert.equal(card._entryCancelLatch()===null,releases);
+    if(quick==='unknown') assert.equal(quickStatus.textContent,'Unknown');
+  });
+}
+
 test('corresponding backend terminal Cancel failure releases latch without claiming success or resending',async()=>{
   const {card,actions,cancelMessage,writeStatus}=editable(); let calls=0;
   card._hass.states.w={state:'idle',attributes:{can_cancel:true,session_id:'session'}};
@@ -359,6 +447,23 @@ function renderable(card){
   card._render=PetFeederCard.prototype._render;
 }
 const commandMessages=root=>root.children.filter(node=>node.attributes&&'data-command-message' in node.attributes);
+
+test('rendered Feed and Defrost buttons follow backend gates when quick status is unknown',()=>{
+  const {card}=setup(); renderable(card);
+  card._config.actions=['feed','defrost'].map(operation=>({name:operation,icon:'mdi:food',data:{operation}}));
+  for (const status of ['unknown','pending','feeding']) {
+    for (const allowed of [true,false]) {
+      card._hass.states.q={state:status,attributes:{}};
+      card._hass.states.w.attributes.can_feed=allowed;
+      card._hass.states.w.attributes.can_defrost=allowed;
+      card._render();
+      const buttons=[...card._root.innerHTML.matchAll(/<button class="round action[^>]+data-action="([01])"[^>]*>/g)].map(match=>match[0]);
+      assert.equal(buttons.length,2);
+      assert.equal(/ disabled/.test(buttons[0]),!allowed || status!=='unknown',`feed ${status} ${allowed}`);
+      assert.equal(/ disabled/.test(buttons[1]),!allowed || status==='pending',`defrost ${status} ${allowed}`);
+    }
+  }
+});
 
 test('command rejection arriving while the controls dialog is open is shown in the dialog status region',async()=>{
   const ctx=setup(); const {card,section}=ctx; const dialog=card._dialog; renderable(card);

@@ -103,6 +103,15 @@ export function scheduleSaveData(entryId, draft) {
   return { entry_id: entryId, entries: copy(draft.entries), base_revision: draft.baseRevision };
 }
 
+function recoveryResolution(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 4
+      || !['operation_id', 'session_id', 'operation', 'outcome'].every(key => Object.hasOwn(value, key))
+      || !['operation_id', 'session_id'].every(key => typeof value[key] === 'string' && value[key].length > 0 && value[key].length <= 128)
+      || !['feed', 'cancel', 'defrost', 'refilled', 'schedule', 'settings'].includes(value.operation)
+      || !['observed_safe', 'abandoned'].includes(value.outcome)) return null;
+  return { operationId: value.operation_id, sessionId: value.session_id, operation: value.operation, outcome: value.outcome };
+}
+
 export function freshfeedView(config, hass) {
   const routes = config?.freshfeed ?? {};
   const entity = id => {
@@ -123,13 +132,15 @@ export function freshfeedView(config, hass) {
   const history = entity(routes.history_entity)?.attributes;
   return {
     schedule, draftAvailable: createScheduleDraft(schedule) !== null,
-    freshnessLabel: schedule.source_state === 'current' ? 'Current' : schedule.source_state === 'last_known' ? 'Last known' : 'Unknown',
+    freshnessLabel: a.provenance === 'cloud' ? 'Read from the PetSafe cloud' : schedule.source_state === 'current' ? 'Current' : schedule.source_state === 'last_known' ? 'Last known' : 'Unknown',
     lastSeen: schedule.observed_at,
     writeState: s.state ?? status?.state ?? 'blocked', operationId: s.operation_id ?? null,
     operation: s.operation ?? null, sessionId: s.session_id ?? null, reason: s.reason ?? null,
     observedFailure: s.observed_failure && ['operation_id', 'operation', 'session_id'].every(key => typeof s.observed_failure[key] === 'string' && s.observed_failure[key]) ? { operationId: s.observed_failure.operation_id, operation: s.observed_failure.operation, sessionId: s.observed_failure.session_id } : null,
     storageFault: s.storage_fault === true, integrityFault: s.integrity_fault === true,
     recoveryCanStart: s.recovery_can_start === true, recoveryPhase: s.recovery_phase ?? 'idle',
+    recoveryResolutionPresent: Object.hasOwn(s, 'recovery_resolution'),
+    recoveryResolution: recoveryResolution(s.recovery_resolution),
     canFeed: s.can_feed === true, canDefrost: s.can_defrost === true, canRefilled: s.can_refilled === true,
     blockedReason: s.blocked_reason ?? null, canCancel: s.can_cancel === true, cancelReason: s.cancel_reason ?? null,
     quickFeed: { status: ['idle', 'pending', 'feeding', 'ready', 'failed'].includes(quick?.state) ? quick.state : null, command: ['none', 'start', 'cancel', 'now'].includes(q.command) ? q.command : null, minutes: ['idle', 'pending', 'feeding', 'ready', 'failed'].includes(quick?.state) && Number.isFinite(q.minutes) ? q.minutes : null, haUpdated: typeof quick?.last_updated === 'string' && Number.isFinite(Date.parse(quick.last_updated)) ? quick.last_updated : null },

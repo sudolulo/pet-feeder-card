@@ -1,4 +1,4 @@
-import { bindDiscoveredFeeder, discoverFreshfeedBindings, freshfeedDevices, patchEditorConfig } from './freshfeed-editor-model.js?v=0.4.0';
+import { bindDiscoveredFeeder, discoverFreshfeedBindings, freshfeedDevices, patchEditorConfig } from './freshfeed-editor-model.js?v=0.4.1';
 const JSON_FIELDS = ['chip','footer','entities','raw_entities','freshfeed','actions','controls'];
 const SEMANTIC = ['entry_id','schedule_entity','write_status_entity','quick_feed_entity','history_entity'];
 const Base = globalThis.HTMLElement ?? class {};
