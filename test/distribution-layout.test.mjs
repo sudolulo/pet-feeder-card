@@ -23,9 +23,9 @@ test('README synthetic example validates against shipped card', async () => {
 test('plugin manifest, release metadata, public notice and unfiltered CI', () => {
   assert.deepEqual(JSON.parse(read('hacs.json')), {name: 'Pet Feeder Card', content_in_root: false, filename: 'pet-feeder-card.js', zip_release: false});
   for (const f of modules) assert.ok(existsSync(new URL(`../dist/${f}`, import.meta.url)));
-  assert.equal(JSON.parse(read('package.json')).version, '0.4.1');
-  const lock = JSON.parse(read('package-lock.json')); assert.equal(lock.version, '0.4.1'); assert.equal(lock.packages[''].version, '0.4.1');
-  assert.match(read('README.md'), /0\.4\.1/); assert.doesNotMatch(read('NOTICE'), /[\w.+-]+@[\w.-]+\.[A-Za-z]+/);
+  assert.equal(JSON.parse(read('package.json')).version, '0.4.2');
+  const lock = JSON.parse(read('package-lock.json')); assert.equal(lock.version, '0.4.2'); assert.equal(lock.packages[''].version, '0.4.2');
+  assert.match(read('README.md'), /0\.4\.2/); assert.doesNotMatch(read('NOTICE'), /[\w.+-]+@[\w.-]+\.[A-Za-z]+/);
   assert.equal(existsSync(new URL('../distribution/', import.meta.url)), false); assert.equal(existsSync(new URL('../custom_components/', import.meta.url)), false);
   assert.ok(read('.github/workflows/validate.yml').startsWith('name: Validate\non:\n  push:\n  pull_request:\n  workflow_dispatch:\n'));
   assert.match(read('test/live-card-config.test.mjs'), /test\/fixtures\/live-card\.json|\.\/fixtures\/live-card\.json/);

@@ -1,5 +1,5 @@
 // Pure registry binding and immutable configuration edits. No device operations.
-import { validateConfig, ENTITY_KEYS } from './pet-feeder-card.js?v=0.4.1';
+import { validateConfig, ENTITY_KEYS } from './pet-feeder-card.js?v=0.4.2';
 const DOMAIN = 'petsafe_freshfeed';
 const SEMANTIC = ['schedule', 'write_status', 'quick_feed', 'history'];
 const clone = value => structuredClone(value);

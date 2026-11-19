@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.2] - Unreleased
+## [0.4.2] - 2026-11-19
 
 ### Changed
 - The card now lives in its own repository with the distribution modules under `dist/`; installed files and the resource path are unchanged.

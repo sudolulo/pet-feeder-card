@@ -6,7 +6,7 @@
 
 ![FreshFeed card in light and dark themes, with synthetic data](docs/images/card-pair.png)
 
-A Home Assistant dashboard card for PetSafe FreshFeed and Aqara C1. Card version **0.4.1** is independent of the integration version. The FreshFeed integration requires Home Assistant 2026.10.0 or newer; the card's Aqara and raw modes are independent. This community project is not affiliated with PetSafe, FreshFeed or Aqara.
+A Home Assistant dashboard card for PetSafe FreshFeed and Aqara C1. Card version **0.4.2** is independent of the integration version. The FreshFeed integration requires Home Assistant 2026.10.0 or newer; the card's Aqara and raw modes are independent. This community project is not affiliated with PetSafe, FreshFeed or Aqara.
 
 <img src="docs/images/feeder.jpg" width="320" alt="PetSafe FreshFeed feeder (product photo: PetSafe)">
 

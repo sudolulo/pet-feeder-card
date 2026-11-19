@@ -1,7 +1,7 @@
 /*
  * pet-feeder-card -- Home Assistant Lovelace custom card for pet feeders.
  */
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.1';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.2';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -998,7 +998,7 @@ export function renderArt(art) {
 // Custom element
 // ---------------------------------------------------------------------------
 
-const CARD_VERSION = '0.4.1';
+const CARD_VERSION = '0.4.2';
 const CONFIRM_MS = 4000;
 const TICK_MS = 60000; // refresh relative times once a minute
 
@@ -1295,7 +1295,7 @@ let modalOwner = null;
 
 export class PetFeederCard extends Base {
   static async getConfigElement() {
-    await import('./pet-feeder-card-editor.js?v=0.4.1');
+    await import('./pet-feeder-card-editor.js?v=0.4.2');
     return document.createElement('pet-feeder-card-editor');
   }
 
