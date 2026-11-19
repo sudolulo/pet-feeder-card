@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2] - Unreleased
+
+### Changed
+- The card now lives in its own repository with the distribution modules under `dist/`; installed files and the resource path are unchanged.
+- Removed the private development link from the README.
+
+### Known issues
+- To install a release other than the latest, download the latest release first, then choose the other version from the installed repository in HACS. On a repository that has never been downloaded, HACS otherwise installs the latest release's files whichever version you select.
+
 ## Card [0.4.1] - 2026-11-19
 
 ### Fixed
