@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const contractBytes = readFileSync(new URL('./fixtures/cancel-service-contract.json', import.meta.url));
+const contractCases = JSON.parse(contractBytes);
+test('cancel service contract fixture hash', () => {
+  assert.equal(createHash('sha256').update(contractBytes).digest('hex'), 'ec5c587140a40c8aa255c96e188d85f9b3da8373d9da8bee63d1b511f1ef7aab');
+});
 const failureView = () => JSON.parse(readFileSync(new URL('./fixtures/cancel-observed-failure.json', import.meta.url), 'utf8'));
 import { PetFeederCard, validateConfig } from '../dist/pet-feeder-card.js';
 
@@ -248,8 +254,7 @@ test('unresolved Cancel outcome stays with its entry across an asynchronous fail
   assert.equal(cancelMessage.textContent,'Outcome uncertain');
 });
 
-test('real HA service Cancel response releases only a proven rejection', {skip:!process.env.PETSAFE_CANCEL_SERVICE_RESULT}, async()=>{
-  const {initial,response,safe}=JSON.parse(process.env.PETSAFE_CANCEL_SERVICE_RESULT);
+for (const {name,initial,response,safe} of contractCases) test(`real HA service Cancel response releases only a proven rejection: ${name}`, async()=>{
   const {card,cancelMessage}=setup(); let calls=0;
   card._hass.states.w={state:initial.state,attributes:initial};
   card._hass.states.q={state:'pending',attributes:{minutes:1}};
