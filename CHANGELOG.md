@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 ### Changed
-- The README is rewritten for public use, with a card screenshot using synthetic data, and the repository adds issue templates and a security policy.
-- Developer documentation is a short public guide; maintainer-only live dashboard tools are no longer part of the repository.
+- Clearer README covering installation, configuration examples and the FreshFeed controls.
+- Bug report template, security policy and a short developer guide; maintainer-only dashboard tools are no longer in the repository.
 
 ### Fixed
 - The visual harness checks that the controls panel stays inside the viewport and that every control row can be scrolled into view, matching the full-screen dialog.

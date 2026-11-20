@@ -239,9 +239,9 @@ use "in N minutes", "in N hours", "in N days".
 
 ## Engineering constraints
 
-- Four sibling ES modules installed together: `card/pet-feeder-card.js`,
-  `card/freshfeed-model.js`, `card/pet-feeder-card-editor.js` and
-  `card/freshfeed-editor-model.js`, with versioned 0.4.0 imports.
+- Four sibling ES modules installed together: `dist/pet-feeder-card.js`,
+  `dist/freshfeed-model.js`, `dist/pet-feeder-card-editor.js` and
+  `dist/freshfeed-editor-model.js`, with imports versioned to the card release.
   No build step, no npm runtime deps,
   no Lit import (HA does not expose Lit to custom cards reliably): plain `HTMLElement` +
   shadow DOM, re-render on `set hass` only when a watched entity's state object changed.
