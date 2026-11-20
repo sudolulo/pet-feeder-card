@@ -1,14 +1,18 @@
 # Changelog
 
-## [0.4.2] - 2026-11-19
+## [Unreleased]
 
 ### Changed
-- The card now lives in its own repository with the distribution modules under `dist/`; installed files and the resource path are unchanged.
 - The README is rewritten for public use, with a card screenshot using synthetic data, and the repository adds issue templates and a security policy.
 - Developer documentation is a short public guide; maintainer-only live dashboard tools are no longer part of the repository.
 
 ### Fixed
 - The visual harness checks that the controls panel stays inside the viewport and that every control row can be scrolled into view, matching the full-screen dialog.
+
+## [0.4.2] - 2026-11-19
+
+### Changed
+- The card now lives in its own repository with the distribution modules under `dist/`; installed files and the resource path are unchanged.
 
 ## [0.4.1] - 2026-11-19
 
