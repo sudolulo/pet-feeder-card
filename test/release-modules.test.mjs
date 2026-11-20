@@ -27,13 +27,13 @@ test('0.4.2 sibling modules load with their shipped import graph', async () => {
 
 test('release notes preserve history and describe recovery', async () => {
   const text = await readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
-  assert.match(text, /## Card \[0\.4\.1\] - 2026-11-19/);
+  assert.match(text, /## \[0\.4\.1\] - 2026-11-19/);
   assert.match(text, /abandonment/i);
   assert.match(text, /0\.5\.0.*strict fallback/i);
-  const marker = '## Card [0.4.0] - 2026-11-18';
+  const marker = '## [0.4.0] - 2026-11-18';
   const index = text.indexOf(marker);
   assert.notEqual(index, -1);
   const historical = '# Changelog\n\n' + text.slice(index);
   assert.equal(createHash('sha256').update(historical).digest('hex'),
-    'f13f065cbdc31e59938951bb4d5271d24cfac2091355b6f21364915309413bcb');
+    '17335fc4a871d0d91675261b8f125f80eae1430360b7f90546eb3462f80dace0');
 });

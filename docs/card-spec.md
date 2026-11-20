@@ -44,9 +44,8 @@ Diagnostics omit identity and Repairs never mutate retained intent.
 
 ## Visual reference
 
-The Whisker card preview is at `docs/whisker-reference.png` (copy of
-https://raw.githubusercontent.com/homeassistant-extras/whisker/main/docs/assets/robot.png).
-Match its structure and polish:
+The layout follows the structure of the
+[Whisker card](https://github.com/homeassistant-extras/whisker):
 
 1. Header row: card name (left, ~22px, medium weight); status label + coloured status icon
    (right). Thin divider under the header.
@@ -254,9 +253,7 @@ use "in N minutes", "in N hours", "in N days".
 - Tests: `node --test test/` (Node 24, `node:test` + `node:assert`), no dependencies.
 - Visual harness: `harness/index.html` renders the card with a mock `hass` object
   (`states`, `callService` that logs, `formatEntityState` optional) in a grid of scenarios,
-  and `harness/shoot.mjs` uses Playwright (installed into this project's `node_modules`,
-  using the already-cached Chromium under `~/.cache/ms-playwright`; do not download browsers
-  into `/tmp`) to write PNGs to `harness/out/`. Scenarios: FreshFeed ready/high,
+  and `harness/shoot.mjs` uses Playwright to write PNGs to `harness/out/`. Scenarios: FreshFeed ready/high,
   feeding/low (animation paused at a mid frame), empty, fault, offline; Aqara C1 ready
   bowl full with schedule, bowl empty; each in a light and a dark theme (set the theme CSS
   variables on the harness page).

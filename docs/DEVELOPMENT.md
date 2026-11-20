@@ -1,13 +1,40 @@
-# Card development
+# Development
 
-### Card deployment and resource procedure
+## Layout
 
-**Separate authorization is required** for every live deployment, resource update or dashboard change. These are maintainer instructions, not evidence that any operation was performed. First run `npm install --no-fund --no-audit`, `npm test` and `npm run shoot` locally. Before a live change, back up the current modules and dashboard YAML; inspect the actual card slots, existing resource ID, URL and cache-buster. `<cards.json>` is demo data, not a live backup or binding inventory.
+- `dist/`: the four ES modules that make up the card. `pet-feeder-card.js` is the
+  entry point; it imports `freshfeed-model.js` and loads the editor modules on demand.
+- `test/`: `node:test` unit and DOM tests. They use synthetic states only.
+- `harness/`: a local browser harness. `harness/index.html` renders the card with a mock
+  `hass` object in a grid of scenarios, and `harness/shoot.mjs` drives it with Playwright.
+- `docs/card-spec.md`: design notes for the card's layout and behavior.
+- `assets/brand/`: the project mark and its render script.
 
-Deploy all four sibling files together: `dist/pet-feeder-card.js`, `dist/freshfeed-model.js`, `dist/pet-feeder-card-editor.js` and `dist/freshfeed-editor-model.js`. Stage each file under a temporary name in the verified HA `/config/www/pet-feeder-card/` directory, then replace the corresponding module. Verify sibling import query versions whenever a module changes: changing only the Lovelace resource cache-buster does not invalidate imports. Update only the verified existing resource URL's cache-buster, then refresh the browser; a Home Assistant core restart is not needed. `tools/cmds/update-resource.json` contains a fixed resource ID and version: inspect and deliberately adjust it to match the verified live resource before using `tools/with-ha-token.sh node tools/ha-ws.mjs tools/cmds/update-resource.json`. The token helper obtains credentials at runtime; never save a token in a file or command.
+## Tests
 
-### Parity binding and demo screenshots
+Use Node 22 or newer (CI uses Node 22).
 
-`test/fixtures/live-card.json` is a sanitized parity template, not a deployable backup. For a separately authorized deployment, privately replace `REPLACE_WITH_INTEGRATION_ENTRY_ID` with the existing integration entry ID; the card rejects the sentinel. Inspect and preserve the actual card positions, raw entity IDs and Aqara configuration; the former recorded positions `/views/1/sections/1/cards/0` and `/views/9/cards/2` are hints to verify, not authority to overwrite. Its Feed, Defrost and Refilled actions use `petsafe_freshfeed.command`; schedule and recovery use guarded integration services. Generic user-authored raw service calls are not intercepted.
+```sh
+npm ci
+npm test
+```
 
-`npm run shoot` uses the local mock harness and writes screenshots under `harness/out/`; its parity output uses a unique directory and preserves existing output. It is software evidence, not live or physical-device verification. For a separately authorized dedicated demo dashboard only, inspect `<cards.json>` and start with `tools/with-ha-token.sh node tools/add-cards.mjs <cards.json> --dry-run`. Even dry-run writes `deploy/lovelace-before.json`, a private HA configuration snapshot: protect it and never commit it. The non-dry-run command replaces matching cards by model and can overwrite a converted raw card; never use it to upgrade a live FreshFeed dashboard. `tools/with-ha-token.sh node tools/shoot-live.mjs` is interactive and presses Feed: do not run it against converted live cards. Restore demo configuration only deliberately and under the same separate authorization.
+The YAML examples in the README are parsed during the tests, which needs Python with
+PyYAML (set `PETSAFE_YAML_PYTHON` to use a specific interpreter).
+
+## Visual harness
+
+```sh
+npx playwright install chromium
+npm run shoot
+```
+
+`npm run shoot` renders every scenario in light and dark themes, runs layout and
+accessibility checks, and writes screenshots to a new directory under `harness/out/`.
+The harness uses mock data only and never contacts Home Assistant or a feeder.
+
+## Releases
+
+Bump `package.json` and add a `CHANGELOG.md` entry in the same commit, then tag
+`v<version>`. Releases have no assets: HACS installs the four modules from `dist/`
+in the tagged tree.

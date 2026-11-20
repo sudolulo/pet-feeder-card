@@ -171,8 +171,8 @@ try {
     out.rowsAfterDisconnect = d._dialogRows.length;
     out.armedAfterDisconnect = d._armed === -1;
 
-    // Eight controls fit within a 600px card. The panel stays inside the card
-    // and advertises a scroll container for real HA rows that exceed its height.
+    // The fixed modal belongs to the viewport, not the card. Simulate tall HA
+    // rows to exercise overflow and verify each row can be scrolled into view.
     const eight = document.createElement('pet-feeder-card');
     const controlIds = Array.from({ length: 8 }, (_, i) => `input_select.freshfeed_control_${i}`);
     const eightStates = {
@@ -187,10 +187,17 @@ try {
     eight.shadowRoot.querySelector('.round.menu').click();
     await new Promise((res) => setTimeout(res, 50));
     const panel = eight.shadowRoot.querySelector('.panel');
-    const cardRect = eight.shadowRoot.querySelector('ha-card').getBoundingClientRect();
+    const rows = [...panel.querySelectorAll('.rows > *')];
+    rows.forEach((row) => { row.style.height = '150px'; });
     const panelRect = panel.getBoundingClientRect();
-    out.eightControlPanelInsideCard = panelRect.top >= cardRect.top && panelRect.bottom <= cardRect.bottom;
-    out.eightControlPanelScrollable = getComputedStyle(panel).overflowY === 'auto';
+    out.eightControlPanelInsideViewport = panelRect.top >= 0 && panelRect.left >= 0 && panelRect.bottom <= innerHeight && panelRect.right <= innerWidth;
+    out.eightControlPanelScrollable = getComputedStyle(panel).overflowY === 'auto' && panel.scrollHeight > panel.clientHeight;
+    out.eightControlsReachable = rows.length === 8 && rows.every((row) => {
+      row.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = row.getBoundingClientRect();
+      const head = panel.querySelector('.panel-head').getBoundingClientRect();
+      return rect.top >= Math.max(panelRect.top, head.bottom) - 1 && rect.bottom <= panelRect.bottom + 1 && rect.left >= panelRect.left - 1 && rect.right <= panelRect.right + 1;
+    });
     eight.remove();
 
     // meal tray: counter of 2 delivered out of 6
@@ -302,7 +309,7 @@ try {
   check(r.armedAfterTransientReparent, 'transient re-parent preserves an armed action');
   check(r.overlayAfterDisconnect === 0 && r.rowsAfterDisconnect === 0, `real disconnect removes controls and rows (overlays ${r.overlayAfterDisconnect}, rows ${r.rowsAfterDisconnect})`);
   check(r.armedAfterDisconnect, 'real disconnect disarms the confirm action');
-  check(r.eightControlPanelInsideCard && r.eightControlPanelScrollable, `eight-control panel stays inside a 600px card and scrolls (inside ${r.eightControlPanelInsideCard}, scrollable ${r.eightControlPanelScrollable})`);
+  check(r.eightControlPanelInsideViewport && r.eightControlPanelScrollable && r.eightControlsReachable, `eight-control modal stays inside viewport, scrolls and reaches every row (inside ${r.eightControlPanelInsideViewport}, scrollable ${r.eightControlPanelScrollable}, reachable ${r.eightControlsReachable})`);
   check(r.trayTileCount === 6, `meal tray shows 6 compartment tiles (got ${r.trayTileCount})`);
   check(
     JSON.stringify(r.trayStates) === JSON.stringify(['eaten', 'serving', 'full', 'full', 'full', 'full']),

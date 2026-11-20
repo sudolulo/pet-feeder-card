@@ -4,13 +4,13 @@
 
 ### Changed
 - The card now lives in its own repository with the distribution modules under `dist/`; installed files and the resource path are unchanged.
-- Removed the private development link from the README.
-- The README shows screenshots with synthetic data and a feeder photo.
+- The README is rewritten for public use, with a card screenshot using synthetic data, and the repository adds issue templates and a security policy.
+- Developer documentation is a short public guide; maintainer-only live dashboard tools are no longer part of the repository.
 
-### Known issues
-- To install a release other than the latest, download the latest release first, then choose the other version from the installed repository in HACS. On a repository that has never been downloaded, HACS otherwise installs the latest release's files whichever version you select.
+### Fixed
+- The visual harness checks that the controls panel stays inside the viewport and that every control row can be scrolled into view, matching the full-screen dialog.
 
-## Card [0.4.1] - 2026-11-19
+## [0.4.1] - 2026-11-19
 
 ### Fixed
 - Release a matching operation/session latch after local abandonment and show execution unknown. The 0.5.0 backend retains the strict fallback.
@@ -19,7 +19,7 @@
 ### Added
 - Opening the schedule dialog requests a schedule refresh, with a retry button while the schedule is unknown.
 
-## Card [0.4.0] - 2026-11-18
+## [0.4.0] - 2026-11-18
 
 ### Added
 - Lazy visual editor with manual configuration fallback, accessible dialogs, friendly
@@ -43,7 +43,7 @@
 - Raw mode does not verify whether selected entities are local or cloud sourced; operators
   must verify their bindings when local provenance matters.
 
-## [0.2.0] — 2026-10-20
+## [0.2.0] - 2026-10-20
 
 ### Added
 - Meal tray row for the FreshFeed: one tile per compartment showing which meals are
@@ -54,7 +54,7 @@
 - Pure `mealSlots()` helper with unit tests; harness checks for the tray, including
   tile fit inside a narrow card.
 
-## [0.1.0] — 2026-10-20
+## [0.1.0] - 2026-10-20
 
 ### Added
 - `custom:pet-feeder-card` with SVG artwork for the PetSafe FreshFeed and Aqara C1,
