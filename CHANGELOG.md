@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] - 2026-11-23
+
+### Added
+- A Reset after refill button appears on FreshFeed cards and becomes prominent when the tray is estimated empty; it uses the same tap-again confirmation as Feed.
 
 ### Changed
 - Clearer README covering installation, configuration examples and the FreshFeed controls.

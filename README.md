@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/sudolulo/pet-feeder-card)](https://github.com/sudolulo/pet-feeder-card/releases)
 [![License](https://img.shields.io/github/license/sudolulo/pet-feeder-card)](LICENSE)
 
-A Home Assistant dashboard card for the PetSafe FreshFeed and Aqara C1 pet feeders. Version **0.4.2**.
+A Home Assistant dashboard card for the PetSafe FreshFeed and Aqara C1 pet feeders. Version **0.5.0**.
 
 ![FreshFeed card in light and dark themes, with synthetic data](docs/images/card-pair.png)
 
@@ -105,6 +105,8 @@ actions:
 - Optional `freshfeed` enables semantic integration features only in FreshFeed standard mode. Supply all five nonempty fields and no others: `entry_id`, `schedule_entity`, `write_status_entity`, `quick_feed_entity`, `history_entity`. Use your real entry ID.
 - `chip` defaults to `last_feed`; set false or null to hide it. `footer` defaults to [`last_fed`, `portions_today`, `next_meal`] and accepts at most 3 items. Both accept display keys `last_feed`, `last_fed`, `portions_today`, `weight_today`, `counter`, `next_meal`, `temperature`, `food_level`.
 - `actions` defaults to an empty list and accepts at most 3 buttons. Each requires `action: domain.service` and may specify `name`, `icon`, `target`, `data` and `confirm`. Name defaults to the action, icon to `mdi:gesture-tap-button`, and confirmation defaults true. With `freshfeed` bound, only `petsafe_freshfeed.command` with data containing exactly `operation: feed`, `defrost`, or `refilled` is allowed; no target, extra data fields or `confirm: false`. Cancel and recovery belong to the dialog.
+- With `freshfeed` bound, the card shows a Reset after refill button under the tray text (under the food gauge when there is no tray). It is small while food is left and becomes a prominent "Refilled? Reset tray" button when the tray is estimated empty. It sends `operation: refilled` with the same tap-again confirmation as Feed, is disabled whenever the integration does not allow a reset, and does not count towards the 3 `actions`. If `actions` already contains a `refilled` command, that button is used instead and is highlighted while the tray is estimated empty.
+- `show_refill_reset` is optional, `true` or `false` (default true), and only valid in FreshFeed standard mode; set false to hide the Reset after refill button and its highlight. Without a bound `freshfeed` no button appears.
 - `controls` defaults to an empty list of entity IDs. With `freshfeed` bound, `text` and `button` entity controls are prohibited.
 
 ## Safety

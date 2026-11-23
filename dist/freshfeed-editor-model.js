@@ -1,5 +1,5 @@
 // Pure registry binding and immutable configuration edits. No device operations.
-import { validateConfig, ENTITY_KEYS } from './pet-feeder-card.js?v=0.4.2';
+import { validateConfig, ENTITY_KEYS } from './pet-feeder-card.js?v=0.5.0';
 const DOMAIN = 'petsafe_freshfeed';
 const SEMANTIC = ['schedule', 'write_status', 'quick_feed', 'history'];
 const clone = value => structuredClone(value);
@@ -56,7 +56,7 @@ export function patchEditorConfig(config, patch) {
   const next = {...clone(config), ...clone(patch)};
   const switched = (patch.model !== undefined && patch.model !== config.model) || (patch.mode !== undefined && patch.mode !== (config.mode || 'standard'));
   if (switched) {
-    for (const key of ['freshfeed','entities','raw_entities','actions','controls','meal_slots','chip','footer']) {
+    for (const key of ['freshfeed','entities','raw_entities','actions','controls','meal_slots','chip','footer','show_refill_reset']) {
       if (!Object.hasOwn(patch,key)) delete next[key];
     }
   }

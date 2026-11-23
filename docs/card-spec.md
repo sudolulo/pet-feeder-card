@@ -115,6 +115,7 @@ actions:                    # round buttons along the top, in order; max 3
     confirm: true                      # default true
 controls:                   # entity ids listed in the controls dialog (menu button)
   - select.x
+show_refill_reset: true     # freshfeed standard mode only; false hides Reset after refill
 ```
 
 ### Raw observations
@@ -153,6 +154,27 @@ still validated in raw mode; `chip` is normalized to `false`, `footer` to `[]`, 
 `--warning-color`, icon `mdi:check`, tooltip "Tap again to confirm") for 4 seconds; a second
 tap within that window calls the service; otherwise it disarms. Never dispense on one tap
 unless `confirm: false`.
+
+### Reset after refill
+
+When `freshfeed` is bound (and `show_refill_reset` is not `false`) the card shows a built-in
+`button.refill-reset[data-refill-reset]` with icon `mdi:tray-arrow-down`. It needs no
+`actions` entry and does not count towards the 3-action limit. It sits on its own row
+directly under the meal tray text, or under the food gauge text when there is no tray.
+
+- Food left (or unknown): small outlined button "Reset after refill" (20px visual
+  height, 44px touch area via a pseudo-element), so the tray tiles keep their layout.
+- Estimated empty (`meals.left === 0`; without a tray, status `empty` or food 0%):
+  class `prominent`, label "Refilled? Reset tray", `--error-color` background,
+  `--text-primary-color` text, at least 44px high. Unknown is never empty.
+- First tap arms it ("Tap again to reset", `--warning-color`) for 4 seconds; the second
+  tap calls `petsafe_freshfeed.command` with `{ entry_id, operation: refilled, confirmed: true }`.
+  Arming survives re-renders and keyboard focus is restored to the button.
+- Disabled whenever the integration does not allow `refilled` (same gate as the actions)
+  and while a command is pending. A refusal shows the usual command message.
+- If `actions` already has a `refilled` command, no built-in button is rendered; that round
+  action button gets class `prominent` while the tray is estimated empty.
+- Not rendered for `aqara_c1`, raw mode, an unbound card or `show_refill_reset: false`.
 
 ### Meal tray
 

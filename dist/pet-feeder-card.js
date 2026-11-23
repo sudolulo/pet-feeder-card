@@ -1,7 +1,7 @@
 /*
  * pet-feeder-card -- Home Assistant Lovelace custom card for pet feeders.
  */
-import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.4.2';
+import { createScheduleDraft, validateScheduleDraft, scheduleSaveData, freshfeedView, feedingEventLabel, freshfeedErrorText, formatFreshfeedTimestamp, scheduleLeadTimeWarning } from './freshfeed-model.js?v=0.5.0';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests)
@@ -342,6 +342,12 @@ export function validateConfig(config) {
     if (config.freshfeed.entry_id === 'REPLACE_WITH_INTEGRATION_ENTRY_ID') throw new Error('pet-feeder-card: bind the FreshFeed integration entry_id before use');
     c.freshfeed = { ...config.freshfeed };
   }
+  if (config.show_refill_reset !== undefined) {
+    if (typeof config.show_refill_reset !== 'boolean') throw new Error('pet-feeder-card: show_refill_reset must be true or false');
+    if (c.model !== 'freshfeed' || c.mode !== 'standard') throw new Error('pet-feeder-card: show_refill_reset can only be used with model: freshfeed in standard mode');
+  }
+  // Built-in Reset after refill button; it renders only once freshfeed is bound.
+  c.show_refill_reset = c.model === 'freshfeed' && c.mode === 'standard' ? config.show_refill_reset !== false : false;
   if (c.mode === 'raw') {
     if (config.entities != null && (typeof config.entities !== 'object' || Array.isArray(config.entities) || Object.keys(config.entities).length)) {
       throw new Error('pet-feeder-card: entities cannot be used in raw mode');
@@ -998,7 +1004,7 @@ export function renderArt(art) {
 // Custom element
 // ---------------------------------------------------------------------------
 
-const CARD_VERSION = '0.4.2';
+const CARD_VERSION = '0.5.0';
 const CONFIRM_MS = 4000;
 const TICK_MS = 60000; // refresh relative times once a minute
 
@@ -1062,6 +1068,9 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
   background: var(--warning-color, #ffa600); border-color: var(--warning-color, #ffa600); color: #fff;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning-color, #ffa600) 25%, transparent);
 }
+.actions .round.prominent:not(.armed) {
+  background: var(--error-color, #db4437); border-color: var(--error-color, #db4437); color: var(--text-primary-color, #fff);
+}
 .art { width: 60%; margin: 0 auto; }
 .art svg { display: block; width: 100%; height: auto; max-height: 216px; overflow: visible; }
 /* A wide product (FreshFeed puck) would sit under a side chip, so the chip moves
@@ -1092,6 +1101,32 @@ ha-card { display: block; position: relative; overflow: hidden; height: 100%; bo
   color: var(--secondary-text-color, #727272);
 }
 .gauge-text { font-size: 13px; color: var(--secondary-text-color, #727272); }
+/* Reset after refill sits on its own row between the gauge head and the tray tiles.
+   Low-key: small outlined text button; the ::before extends the touch target to 44px
+   without taking layout space. */
+.refill-row { display: flex; justify-content: flex-end; margin: 0 0 6px; min-width: 0; }
+.refill-reset {
+  position: relative; display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box;
+  height: 20px; max-width: 100%; padding: 0 8px; border-radius: 10px; cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 1; white-space: nowrap;
+  background: transparent; color: var(--secondary-text-color, #727272);
+  border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+  transition: background-color .2s, color .2s, border-color .2s;
+}
+.refill-reset::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+.refill-reset ha-icon { --mdc-icon-size: 14px; }
+.refill-reset:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+.refill-reset:disabled { cursor: default; opacity: .5; }
+.refill-reset.prominent {
+  min-height: 44px; height: auto; padding: 4px 16px; border-radius: 22px; font-size: 14px; font-weight: 600;
+  white-space: normal; text-align: center; line-height: 1.2;
+  background: var(--error-color, #db4437); border-color: var(--error-color, #db4437); color: var(--text-primary-color, #fff);
+  box-shadow: 0 2px 5px rgba(0,0,0,.16);
+}
+.refill-reset.prominent ha-icon { --mdc-icon-size: 20px; }
+.refill-reset.armed {
+  background: var(--warning-color, #ffa600); border-color: var(--warning-color, #ffa600); color: #fff;
+}
 .bar { height: 8px; border-radius: 4px; background: var(--divider-color, rgba(0,0,0,.12)); overflow: hidden; }
 .bar > div { height: 100%; border-radius: 4px; transition: width .6s ease; }
 /* Meal tray: one tile per compartment, in serving order. Food colours are fixed
@@ -1295,7 +1330,7 @@ let modalOwner = null;
 
 export class PetFeederCard extends Base {
   static async getConfigElement() {
-    await import('./pet-feeder-card-editor.js?v=0.4.2');
+    await import('./pet-feeder-card-editor.js?v=0.5.0');
     return document.createElement('pet-feeder-card-editor');
   }
 
@@ -1306,6 +1341,8 @@ export class PetFeederCard extends Base {
     this._seen = new Map(); // entity_id -> last state object, for change detection
     this._armed = -1; // index of the action awaiting confirmation
     this._armTimer = null;
+    this._refillArmed = false; // built-in Reset after refill awaiting confirmation
+    this._refillArmTimer = null;
     this._tick = null;
     this._now = () => new Date(); // injectable clock for the near-meal advisory
     this._disconnectTimer = null;
@@ -1446,18 +1483,33 @@ export class PetFeederCard extends Base {
     const icon = (name, style = '') => `<ha-icon icon="${esc(name)}"${style ? ` style="${style}"` : ''}></ha-icon>`;
     const more = (entity) => (entity ? ` data-more="${esc(entity)}" role="button" tabindex="0"` : '');
 
+    // Reset after refill: built in for bound FreshFeed cards unless a configured
+    // refilled action already provides it; prominent while the tray is estimated
+    // empty. Unknown readings are never treated as empty.
+    const refillOn = Boolean(c.freshfeed && c.show_refill_reset);
+    const refilledAction = refillOn ? c.actions.findIndex((a) => a.data?.operation === 'refilled') : -1;
+    const trayEmpty = m.meals ? m.meals.left === 0 : m.art.statusKey === 'empty' || m.food?.pct === 0;
+    let resetButton = '';
+    if (refillOn && refilledAction === -1) {
+      const armed = this._refillArmed;
+      const text = armed ? 'Tap again to reset' : trayEmpty ? 'Refilled? Reset tray' : 'Reset after refill';
+      const disabled = !this._canFreshfeedAction('refilled');
+      resetButton = `<button type="button" class="refill-reset${trayEmpty ? ' prominent' : ''}${armed ? ' armed' : ''}" data-refill-reset title="${esc(text)}"${disabled ? ' disabled' : ''}>${icon(armed ? 'mdi:check' : 'mdi:tray-arrow-down')}<span>${esc(text)}</span></button>`;
+    }
+
     const actions = c.actions
       .map((a, i) => {
         const armed = this._armed === i;
         const title = armed ? 'Tap again to confirm' : a.name;
         const disabled = c.freshfeed && !this._canFreshfeedAction(a.data.operation);
-        return `<button class="round action${armed ? ' armed' : ''}" data-action="${i}" title="${esc(title)}" aria-label="${esc(title)}"${disabled ? ' disabled' : ''}>${icon(armed ? 'mdi:check' : a.icon)}</button>`;
+        const prominent = i === refilledAction && trayEmpty ? ' prominent' : '';
+        return `<button class="round action${armed ? ' armed' : ''}${prominent}" data-action="${i}" title="${esc(title)}" aria-label="${esc(title)}"${disabled ? ' disabled' : ''}>${icon(armed ? 'mdi:check' : a.icon)}</button>`;
       })
       .join('');
 
     const gauge = m.food
       ? `<div class="gauge"${more(m.food.entity)} title="${esc(m.food.label)}: ${esc(m.food.text)}">
-           <div class="gauge-head"><span class="gauge-label">${esc(m.food.label)}</span><span class="gauge-text">${esc(m.food.text)}</span></div>
+           <div class="gauge-head"><span class="gauge-label">${esc(m.food.label)}</span><span class="gauge-text">${esc(m.food.text)}</span></div>${m.meals || !resetButton ? '' : `<div class="refill-row">${resetButton}</div>`}
            <div class="bar"><div style="width:${m.food.pct ?? 0}%;background:${m.food.color}"></div></div>
          </div>`
       : '';
@@ -1484,7 +1536,7 @@ export class PetFeederCard extends Base {
     };
     const tray = m.meals
       ? `<div class="gauge meals"${more(m.meals.entity)} aria-label="${esc(m.meals.label)}: ${esc(m.meals.text)}">
-           <div class="gauge-head"><span class="gauge-label">${esc(m.meals.label)}</span><span class="gauge-text" style="color:${m.meals.color}">${esc(m.meals.text)}</span></div>
+           <div class="gauge-head"><span class="gauge-label">${esc(m.meals.label)}</span><span class="gauge-text" style="color:${m.meals.color}">${esc(m.meals.text)}</span></div>${resetButton ? `<div class="refill-row">${resetButton}</div>` : ''}
            <div class="meal-row" style="--meal-count:${m.meals.total}">${m.meals.slots.map(mealTile).join('')}</div>
          </div>`
       : '';
@@ -1492,6 +1544,9 @@ export class PetFeederCard extends Base {
     // innerHTML replaces every element; remember which action button had keyboard
     // focus so a keyboard user can confirm an armed action with a second Enter/Space.
     const focusedAction = this.shadowRoot.activeElement?.dataset?.action;
+    const focusedReset = 'refillReset' in (this.shadowRoot.activeElement?.dataset || {});
+    // With neither a tray nor a food gauge the button still needs a home.
+    const resetOnly = !tray && !gauge && resetButton ? `<div class="refill-row">${resetButton}</div>` : '';
 
     const footer = m.footer.length
       ? `<div class="footer${m.footer.length === 1 ? ' single' : ''}">${m.footer
@@ -1513,7 +1568,7 @@ export class PetFeederCard extends Base {
         <div class="art">${renderArt(m.art)}</div>
         ${m.chip ? `<div class="chip"${more(m.chip.entity)} title="${esc(m.chip.key.replace(/_/g, ' '))}">${icon(m.chip.icon)}<span>${esc(m.chip.value)}</span></div>` : ''}
       </div>
-      ${tray || gauge ? `<div class="gauges">${tray || gauge}</div>` : ''}
+      ${tray || gauge || resetOnly ? `<div class="gauges">${tray || gauge || resetOnly}</div>` : ''}
       ${footer}`);
     this._renderCommandMessage();
     if (this._dialog) {
@@ -1525,6 +1580,7 @@ export class PetFeederCard extends Base {
     if (focusedAction != null) {
       this._root.querySelector(`.actions .round[data-action="${focusedAction}"]`)?.focus();
     }
+    if (focusedReset) this._root.querySelector('[data-refill-reset]')?.focus();
   }
 
   /** Replace the card content, keeping an open overlay (and the focus inside it) attached. */
@@ -1577,8 +1633,9 @@ export class PetFeederCard extends Base {
 
   _onClick(ev) {
     const path = ev.composedPath ? ev.composedPath() : [ev.target];
-    const el = path.find((n) => n && n.dataset && (n.dataset.more || n.dataset.action || 'menu' in n.dataset || 'close' in n.dataset));
+    const el = path.find((n) => n && n.dataset && (n.dataset.more || n.dataset.action || 'refillReset' in n.dataset || 'menu' in n.dataset || 'close' in n.dataset));
     if (!el) return;
+    if ('refillReset' in el.dataset) return this._onRefillReset();
     if (el.dataset.action != null) return this._onAction(Number(el.dataset.action));
     if ('menu' in el.dataset) return this._openControls();
     if ('close' in el.dataset) return this._closeControls();
@@ -1604,13 +1661,7 @@ export class PetFeederCard extends Base {
     }
     this._disarm(false);
     this._render();
-    if (this._config.freshfeed) {
-      this._freshfeedCommandPending = true;
-      this._freshfeedCommandError = null;
-      this._render();
-      Promise.resolve().then(() => this._hass.callService('petsafe_freshfeed', 'command', { entry_id: this._config.freshfeed.entry_id, operation: a.data.operation, confirmed: true })).catch(err => { this._freshfeedCommandError = freshfeedErrorText(err, 'command'); }).finally(() => { this._freshfeedCommandPending = false; this._render(); });
-      return;
-    }
+    if (this._config.freshfeed) return this._sendFreshfeedCommand(a.data.operation);
     const [domain, service] = a.action.split('.');
     if (!this._hass || typeof this._hass.callService !== 'function') {
       console.error(`pet-feeder-card: hass is not available, cannot call ${a.action}`);
@@ -1620,6 +1671,30 @@ export class PetFeederCard extends Base {
     Promise.resolve(this._hass.callService(domain, service, a.data || {}, a.target)).catch((err) => {
       console.error(`pet-feeder-card: ${a.action} failed`, err);
     });
+  }
+
+  /** Send a confirmed FreshFeed command; the pending flag blocks a second send. */
+  _sendFreshfeedCommand(operation) {
+    this._freshfeedCommandPending = true;
+    this._freshfeedCommandError = null;
+    this._render();
+    Promise.resolve().then(() => this._hass.callService('petsafe_freshfeed', 'command', { entry_id: this._config.freshfeed.entry_id, operation, confirmed: true })).catch(err => { this._freshfeedCommandError = freshfeedErrorText(err, 'command'); }).finally(() => { this._freshfeedCommandPending = false; this._render(); });
+  }
+
+  /** Built-in Reset after refill: first tap arms for CONFIRM_MS, second tap sends. */
+  _onRefillReset() {
+    const c = this._config;
+    if (!c || c.mode === 'raw' || !c.freshfeed || !c.show_refill_reset || c.actions.some((a) => a.data?.operation === 'refilled')) return;
+    if (!this._canFreshfeedAction('refilled')) { this._disarm(true); return; }
+    if (!this._refillArmed) {
+      this._disarm(false);
+      this._refillArmed = true;
+      this._refillArmTimer = setTimeout(() => this._disarm(true), CONFIRM_MS);
+      this._render();
+      return;
+    }
+    this._disarm(false);
+    this._sendFreshfeedCommand('refilled');
   }
 
   // FreshFeed-only command failure live region. The element is created once and
@@ -1645,9 +1720,12 @@ export class PetFeederCard extends Base {
   _disarm(render) {
     clearTimeout(this._armTimer);
     this._armTimer = null;
-    const was = this._armed;
+    clearTimeout(this._refillArmTimer);
+    this._refillArmTimer = null;
+    const was = this._armed !== -1 || this._refillArmed;
     this._armed = -1;
-    if (render && was !== -1) this._render();
+    this._refillArmed = false;
+    if (render && was) this._render();
   }
 
   _openControls() {
